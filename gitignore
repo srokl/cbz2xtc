@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+
+# Output directories
+xtc_output/
+.temp_png/
+extracted_manga/
+
+# Test files
+*.cbz
+*.xtc
+*.bmp
+*_bw.png
+*_bw.bmp
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
