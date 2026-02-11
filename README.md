@@ -6,20 +6,21 @@ A collection of command-line tools to convert manga (CBZ), PDF files, and images
 
 - **cbz2xtc** - Powerful standalone converter for CBZ and PDF manga files.
   - **2-bit Grayscale Mode (.xtch)** - 4 levels of gray for significantly better image quality.
-  - **Full PDF Support** - Direct conversion of PDF files (requires `poppler-utils`).
+  - **PDF Support** - Direct conversion of PDF files (requires `poppler-utils`).
   - **Strict Standard Compliance** - Generates files strictly following the XTC v1.0 specification.
   - **Smart Chapter Navigation** -
     - **Folder-based Chapters**: Automatically names chapters based on folders inside CBZ (e.g., `Page 1 - The Beginning`).
     - **Automatic Page Markers**: Every page gets a "Page X" marker for easy jumping.
-  - **Advanced Dithering** -
-    - **Optimized Atkinson**: High-performance implementation for sharp, clean shading.
+  - **Dithering Options** -
+    - For 2-bit use Atkinson and Floyd-Steinberg
+    - **Atkinson**: sharp, clean shading.
     - **Floyd-Steinberg**: Smooth gradients, corrected for 2-bit color space.
     - **Ordered & Rasterize**: Classic patterns for distinct e-ink looks.
   - **Precision Image Controls** -
     - **Gamma Correction**: Adjust midtone brightness (`--gamma 0.7`).
     - **Color Inversion**: Flip Black/White polarity (`--invert`).
     - **Auto-Cropping & Splitting**: Trim margins and split spreads automatically.
-  - **Multithreaded Speed** - Up to 4x faster processing using parallel workers.
+  - **Multithreaded Speed** - Up to 4x processing using parallel workers.
   
 - **image2bw** - Utility to convert individual images to 1-bit BMP for backgrounds.
 
@@ -45,6 +46,7 @@ brew install poppler                # macOS
 
 ### cbz2xtc - Convert CBZ/PDF to XTC/XTCH
 
+ 
 ```bash
 # Basic usage (1-bit XTC, split pages)
 ./cbz2xtc.py
