@@ -10,7 +10,6 @@ A collection of command-line tools to convert manga (CBZ), PDF files, and images
   - **Strict Standard Compliance** - Generates files strictly following the XTC v1.0 specification.
   - **Smart Chapter Navigation** -
     - **Folder-based Chapters**: Automatically names chapters based on folders inside CBZ (e.g., `Page 1 - The Beginning`).
-    - **ComicInfo.xml Support**: Full integration with embedded bookmarks and metadata.
     - **Automatic Page Markers**: Every page gets a "Page X" marker for easy jumping.
   - **Advanced Dithering** -
     - **Optimized Atkinson**: High-performance implementation for sharp, clean shading.
