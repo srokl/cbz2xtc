@@ -22,6 +22,12 @@ import struct
 import hashlib
 import re
 import numpy as np
+try:
+    from numba import njit
+except ImportError:
+    # Fallback to a dummy decorator if numba is missing
+    def njit(func):
+        return func
 from pathlib import Path
 from PIL import Image, ImageOps, ImageDraw, ImageFont
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -48,77 +54,75 @@ DITHER_MAP = {
 }
 
 
-def dither_atkinson(img, levels):
+@njit
+def _atkinson_loop(data, w, h, stride, is_2bit):
     """
-    Apply Atkinson dithering to a grayscale PIL image (Optimized).
+    Core loop for Atkinson dithering, optimized with Numba.
+    Image starts at x=1 to allow Bottom-Left (x-1) without row wrap.
     """
-    w, h = img.size
-    
-    # Create a padded buffer (int16 to handle error overflow)
-    # +2 columns (Right padding), +2 rows (Bottom padding)
-    # Stride is width + 2
-    stride = w + 2
-    buff = np.zeros((h + 2, w + 2), dtype=np.int16)
-    
-    # Copy image data into buffer
-    # img is L mode, convert to array
-    img_arr = np.array(img, dtype=np.int16)
-    buff[0:h, 0:w] = img_arr
-    
-    # Flatten to list for fast iteration in Python (faster than numpy scalar access)
-    data = buff.flatten().tolist()
-    
-    # Determine mode based on levels count
-    is_2bit = (len(levels) > 2)
-    
-    # Loop parameters
-    # We iterate 0..h-1 and 0..w-1
-    # But in the flattened `data` with stride `w+2`
-    
     for y in range(h):
         row_start = y * stride
-        for x in range(w):
+        for x in range(1, w + 1):
             idx = row_start + x
             old_val = data[idx]
             
             # Thresholding / Quantization
             if is_2bit:
-                # 2-bit (0, 85, 170, 255)
-                # Thresholds: 42, 127, 212
                 if old_val < 42: new_val = 0
                 elif old_val < 127: new_val = 85
                 elif old_val < 212: new_val = 170
                 else: new_val = 255
             else:
-                # 1-bit (0, 255)
                 new_val = 0 if old_val < 128 else 255
             
             data[idx] = new_val
             err = old_val - new_val
             
             if err != 0:
-                # Atkinson Kernel (1/8)
                 err8 = err >> 3
                 if err8 != 0:
-                    # Right 1
+                    # Atkinson Kernel (1/8)
+                    # Current Row
                     data[idx + 1] += err8
-                    # Right 2
                     data[idx + 2] += err8
                     
-                    # Next Rows
-                    idx_down = idx + stride
-                    data[idx_down - 1] += err8 # Bottom-Left
-                    data[idx_down]     += err8 # Bottom-Mid
-                    data[idx_down + 1] += err8 # Bottom-Right
+                    # Next Row
+                    idx_n = idx + stride
+                    data[idx_n - 1] += err8 # Bottom-Left
+                    data[idx_n]     += err8 # Bottom-Mid
+                    data[idx_n + 1] += err8 # Bottom-Right
                     
                     # 2 Rows Down
-                    data[idx_down + stride] += err8 # Bottom-Bottom-Mid
+                    data[idx_n + stride] += err8 # Bottom-Bottom-Mid
 
-    # Reconstruct image
-    # Use int16 first because padding areas contain unclamped error values
-    res_arr = np.array(data, dtype=np.int16).reshape((h + 2, w + 2))
-    # Slice valid area (which is guaranteed to be quantized to uint8-safe values)
-    final_arr = res_arr[0:h, 0:w].astype(np.uint8)
+
+def dither_atkinson(img, levels):
+    """
+    Apply Atkinson dithering to a grayscale PIL image (Optimized with Numba).
+    """
+    w, h = img.size
+    
+    # Create a padded buffer (int16 to handle error overflow)
+    # x=0: left padding (for bottom-left)
+    # x=1..w: image
+    # x=w+1..w+2: right padding (for right 1, right 2)
+    # y=h..h+2: bottom padding
+    stride = w + 3
+    buff = np.zeros((h + 3, stride), dtype=np.int16)
+    
+    # Copy image data into buffer at x=1
+    img_arr = np.array(img, dtype=np.int16)
+    buff[0:h, 1:w+1] = img_arr
+    
+    # Flatten for Numba
+    data = buff.flatten()
+    
+    is_2bit = (len(levels) > 2)
+    _atkinson_loop(data, w, h, stride, is_2bit)
+
+    # Reconstruct and crop
+    res_arr = data.reshape((h + 3, stride))
+    final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
     
     return Image.fromarray(final_arr, 'L')
 
@@ -738,55 +742,31 @@ def save_with_padding(img, output_path, *, padcolor=255):
 
 def extract_pdf_to_png(pdf_path, temp_dir):
     """
-    Extract PDF to PNGs using pdftoppm (poppler-utils)
+    Extract PDF to PNGs using PyMuPDF (fitz)
     """
-    if not shutil.which("pdftoppm"):
-        print("  ✗ Error: pdftoppm not found. Please install poppler-utils.")
+    try:
+        import fitz
+    except ImportError:
+        print("  ✗ Error: PyMuPDF not found. Please run: pip install pymupdf")
         return None
 
     pdf_name = pdf_path.stem
     output_folder = temp_dir / pdf_name
     output_folder.mkdir(parents=True, exist_ok=True)
     
-    print(f"  Extracting PDF pages...", end=" ", flush=True)
-    
-    # Create a raw directory for initial extraction
-    raw_dir = output_folder / "_raw_extract"
-    raw_dir.mkdir(exist_ok=True)
-    prefix = raw_dir / "page"
-    
     try:
-        # pdftoppm -png input.pdf output_prefix
-        cmd = ["pdftoppm", "-png", str(pdf_path), str(prefix)]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        doc = fitz.open(pdf_path)
+        print(f"  Extracting and converting {len(doc)} PDF pages...", end=" ", flush=True)
         
-        if result.returncode != 0:
-            print(f"✗ Error extracting PDF: {result.stderr}")
-            return None
-            
-        # Get generated files
-        generated_files = list(raw_dir.glob("page-*.png"))
-        
-        if not generated_files:
-            print(f"✗ No images extracted from {pdf_name}")
-            return None
-            
-        # Sort naturally (page-1, page-2, ... page-10)
-        generated_files.sort(key=lambda f: int(f.stem.split('-')[-1]))
-        
-        print(f"✓ ({len(generated_files)} pages)")
-        
-        # Process extracted images
-        for idx, img_file in enumerate(generated_files, 1):
-            with open(img_file, "rb") as f:
-                img_data = f.read()
+        for idx, page in enumerate(doc, 1):
+            # Render page to image (default 72 DPI, usually enough for 480x800 target)
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # 2x scale for better quality before resizing
+            img_data = pix.tobytes("png")
             
             output_base = output_folder / f"{idx:04d}"
             optimize_image(img_data, output_base, idx)
             
-        # Clean up raw directory
-        shutil.rmtree(raw_dir)
-        
+        print(f"✓")
         return output_folder
         
     except Exception as e:
@@ -815,7 +795,7 @@ def extract_cbz_to_png(cbz_path, temp_dir):
                 print(f"  ✗ No images found in {cbz_name}")
                 return None
             
-            print(f"  Extracting {len(image_files)} pages...", end=" ", flush=True)
+            print(f"  Extracting and converting {len(image_files)} pages...", end=" ", flush=True)
             
             for idx, img_file in enumerate(image_files, 1):
                 img_data = zip_ref.read(img_file)
