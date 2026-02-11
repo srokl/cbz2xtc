@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-cbz2xtc - Convert CBZ manga files to XTC format for XTEink X4
-All-in-one tool: CBZ extraction → PNG optimization → XTC conversion
+cbz2xtc - Convert CBZ manga and PDF files to XTC/XTCH format for XTEink X4
+All-in-one tool: Extraction → Optimization → XTC/XTCH Encoding
 
 Usage:
     cbz2xtc                    # Process current directory
     cbz2xtc /path/to/folder    # Process specific folder
     cbz2xtc --clean            # Process and clean up intermediate files
-    cbz2xtc --dither           # Apply dithering for better grayscale→B&W conversion
+    cbz2xtc --dither <algo>    # Specify dithering (floyd, atkinson, ordered, none)
+    cbz2xtc --2bit             # Use 2-bit (4-level) grayscale mode (outputs .xtch)
+    cbz2xtc --gamma 0.7        # Adjust brightness
+    cbz2xtc --invert           # Invert colors
 """
 
 import os
@@ -15,6 +18,10 @@ import sys
 import zipfile
 import shutil
 import subprocess
+import struct
+import hashlib
+import re
+import numpy as np
 from pathlib import Path
 from PIL import Image, ImageOps, ImageDraw, ImageFont
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -25,39 +32,370 @@ import time
 TARGET_WIDTH = 480
 TARGET_HEIGHT = 800
 
-# Global flag for dithering (default True)
-USE_DITHERING = True
+# Global configuration (defaults)
+XTC_MODE = "1bit"        # "1bit" or "2bit"
+DITHER_ALGO = "floyd"    # "floyd", "ordered", "rasterize", "none"
+GAMMA_VALUE = 1.0        # Gamma correction value (1.0 = neutral)
+INVERT_COLORS = False    # Invert colors (White <-> Black)
+
+# Dithering options mapping
+DITHER_MAP = {
+    'floyd': Image.Dither.FLOYDSTEINBERG,
+    'ordered': Image.Dither.ORDERED,
+    'rasterize': Image.Dither.RASTERIZE,
+    'none': Image.Dither.NONE,
+    'atkinson': 'atkinson' # Custom implementation
+}
 
 
-def find_png2xtc():
+def dither_atkinson(img, levels):
     """
-    Find png2xtc.py in common locations
-    Returns path if found, None otherwise
+    Apply Atkinson dithering to a grayscale PIL image (Optimized).
     """
-    possible_paths = [
-        # Check environment variable first
-        Path(os.environ.get('PNG2XTC_PATH', '')),
-        # Same directory as this script
-        Path(__file__).parent / "png2xtc.py",
-        # epub2xtc subfolder
-        Path(__file__).parent / "epub2xtc" / "png2xtc.py",
-        # Parent directory
-        Path(__file__).parent.parent / "png2xtc.py",
-        # Parent epub2xtc folder
-        Path(__file__).parent.parent / "epub2xtc" / "png2xtc.py",
-        # Windows common location
-        Path(r"H:\commandline_tools\epub2xtc\png2xtc.py"),
-        # Linux/Mac common locations
-        Path.home() / ".local" / "bin" / "png2xtc.py",
-        Path("/usr/local/bin/png2xtc.py"),
-    ]
+    w, h = img.size
     
-    for path in possible_paths:
-        if path.exists():
-            # print("png2xtc exists at ",path) # debugging.
-            return path
+    # Create a padded buffer (int16 to handle error overflow)
+    # +2 columns (Right padding), +2 rows (Bottom padding)
+    # Stride is width + 2
+    stride = w + 2
+    buff = np.zeros((h + 2, w + 2), dtype=np.int16)
     
-    return None
+    # Copy image data into buffer
+    # img is L mode, convert to array
+    img_arr = np.array(img, dtype=np.int16)
+    buff[0:h, 0:w] = img_arr
+    
+    # Flatten to list for fast iteration in Python (faster than numpy scalar access)
+    data = buff.flatten().tolist()
+    
+    # Determine mode based on levels count
+    is_2bit = (len(levels) > 2)
+    
+    # Loop parameters
+    # We iterate 0..h-1 and 0..w-1
+    # But in the flattened `data` with stride `w+2`
+    
+    for y in range(h):
+        row_start = y * stride
+        for x in range(w):
+            idx = row_start + x
+            old_val = data[idx]
+            
+            # Thresholding / Quantization
+            if is_2bit:
+                # 2-bit (0, 85, 170, 255)
+                # Thresholds: 42, 127, 212
+                if old_val < 42: new_val = 0
+                elif old_val < 127: new_val = 85
+                elif old_val < 212: new_val = 170
+                else: new_val = 255
+            else:
+                # 1-bit (0, 255)
+                new_val = 0 if old_val < 128 else 255
+            
+            data[idx] = new_val
+            err = old_val - new_val
+            
+            if err != 0:
+                # Atkinson Kernel (1/8)
+                err8 = err >> 3
+                if err8 != 0:
+                    # Right 1
+                    data[idx + 1] += err8
+                    # Right 2
+                    data[idx + 2] += err8
+                    
+                    # Next Rows
+                    idx_down = idx + stride
+                    data[idx_down - 1] += err8 # Bottom-Left
+                    data[idx_down]     += err8 # Bottom-Mid
+                    data[idx_down + 1] += err8 # Bottom-Right
+                    
+                    # 2 Rows Down
+                    data[idx_down + stride] += err8 # Bottom-Bottom-Mid
+
+    # Reconstruct image
+    # Use int16 first because padding areas contain unclamped error values
+    res_arr = np.array(data, dtype=np.int16).reshape((h + 2, w + 2))
+    # Slice valid area (which is guaranteed to be quantized to uint8-safe values)
+    final_arr = res_arr[0:h, 0:w].astype(np.uint8)
+    
+    return Image.fromarray(final_arr, 'L')
+
+
+def png_to_xtg_bytes(img: Image.Image, force_size=(480, 800), threshold=128):
+    """Convert PIL image to XTG bytes (1-bit monochrome)."""
+    if img.size != force_size:
+        img = img.resize(force_size, Image.LANCZOS)
+
+    w, h = img.size
+    # Ensure standard grayscale
+    if img.mode != 'L':
+        img = img.convert("L")
+    
+    row_bytes = (w + 7) // 8
+    data = bytearray(row_bytes * h)
+
+    pixels = img.load()
+    for y in range(h):
+        for x in range(w):
+            # 0=Black, 255=White. E-ink: 1=White, 0=Black usually? 
+            # png2xtc.py used: bit = 1 if pixels[x, y] >= threshold else 0
+            # So 1 is White.
+            bit = 1 if pixels[x, y] >= threshold else 0
+            
+            byte_index = y * row_bytes + (x // 8)
+            bit_index = 7 - (x % 8)  # MSB first
+            if bit:
+                data[byte_index] |= 1 << bit_index
+
+    md5digest = hashlib.md5(data).digest()[:8]
+    data_size = len(data)
+
+    # XTG header: <4sHHBBI8s> little-endian
+    header = struct.pack(
+        "<4sHHBBI8s",
+        b"XTG\x00",
+        w,
+        h,
+        0,  # colorMode
+        0,  # compression
+        data_size,
+        md5digest,
+    )
+    return header + data
+
+
+def png_to_xth_bytes(img: Image.Image, force_size=(480, 800)):
+    """
+    Convert PIL image to XTH bytes (2-bit grayscale, planar).
+    Follows 'cli/encoder.js' from epub-to-xtc-converter:
+    - Vertical scan, Columns Right-to-Left
+    - 2 bit planes
+    - LUT: White=0(00), Light=2(10), Dark=1(01), Black=3(11)
+    """
+    if img.size != force_size:
+        img = img.resize(force_size, Image.LANCZOS)
+
+    w, h = img.size
+    # Ensure grayscale
+    if img.mode != 'L':
+        img = img.convert("L")
+    
+    # Calculate plane size
+    # colBytes = Math.ceil(height / 8)
+    col_bytes = (h + 7) // 8
+    plane_size = col_bytes * w
+    
+    plane0 = bytearray(plane_size)
+    plane1 = bytearray(plane_size)
+
+    pixels = img.load()
+    
+    # Iterate columns Right to Left
+    # for (let x = width - 1; x >= 0; x--)
+    for x in range(w - 1, -1, -1):
+        col_idx = w - 1 - x
+        
+        for y in range(h):
+            p = pixels[x, y]
+            
+            # Map grayscale to 2-bit value
+            # Matches cli/encoder.js from standard XTC implementation
+            # White (>212) -> 0 (00)
+            # Light (>127) -> 2 (10)
+            # Dark  (>42)  -> 1 (01)
+            # Black (else) -> 3 (11)
+            
+            if p >= 212: 
+                val = 0 # White
+            elif p >= 127:
+                val = 1 # Light Gray (Was 2)
+            elif p >= 42:
+                val = 2 # Dark Gray (Was 1)
+            else:
+                val = 3 # Black
+                
+            # Plane 0: Bit 0
+            # Plane 1: Bit 1            
+            # byteIdx = colIdx * colBytes + Math.floor(y / 8);
+            byte_idx = col_idx * col_bytes + (y // 8)
+            
+            # bitIdx = 7 - (y % 8);
+            bit_idx = 7 - (y % 8)
+            
+            if val & 1:
+                plane0[byte_idx] |= (1 << bit_idx)
+            if val & 2:
+                plane1[byte_idx] |= (1 << bit_idx)
+
+    data = plane0 + plane1
+    md5digest = hashlib.md5(data).digest()[:8]
+    data_size = len(data)
+
+    # XTH header: <4sHHBBI8s> little-endian
+    # Magic is XTH\x00
+    header = struct.pack(
+        "<4sHHBBI8s",
+        b"XTH\x00",
+        w,
+        h,
+        0,  # colorMode (0 in encoder.js)
+        0,  # compression
+        data_size,
+        md5digest,
+    )
+    return header + data
+
+
+def get_cbz_bookmarks(cbz_path):
+    """
+    Extract bookmarks from ComicInfo.xml or folder structure in CBZ.
+    Returns: Dict mapping 1-indexed page number to bookmark title.
+    """
+    import xml.etree.ElementTree as ET
+    bookmarks = {}
+    try:
+        with zipfile.ZipFile(cbz_path, 'r') as zip_ref:
+            file_list = zip_ref.namelist()
+            image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp')
+            os_metadata_exclusions = ('__macos')
+            
+            # Filter and sort image files to establish page order
+            image_files = sorted([f for f in file_list if f.lower().endswith(image_extensions) and not f.lower().startswith(os_metadata_exclusions)])
+            
+            # 1. Try folder-based naming first (User request: "get the chapter name from folder name if available")
+            for idx, img_path in enumerate(image_files, 1):
+                # Extract folder name
+                parts = Path(img_path).parts
+                if len(parts) > 1:
+                    folder_name = parts[-2]
+                    bookmarks[idx] = folder_name
+
+            # 2. Try ComicInfo.xml bookmarks (overwrites folder names if exact matches found)
+            if 'ComicInfo.xml' in file_list:
+                xml_data = zip_ref.read('ComicInfo.xml')
+                root = ET.fromstring(xml_data)
+                pages_node = root.find('Pages')
+                if pages_node is not None:
+                    for idx, page in enumerate(pages_node.findall('Page')):
+                        bookmark = page.get('Bookmark')
+                        if bookmark:
+                            bookmarks[idx + 1] = bookmark
+                            
+    except Exception as e:
+        print(f"  Warning: Could not extract bookmarks from CBZ: {e}")
+        
+    return bookmarks
+
+
+def build_xtc_internal(png_paths, out_path, mode="1bit", toc=None):
+    """
+    Build XTC/XTCH file internally.
+    Strictly follows XTC Format Technical Specification v1.0 (2025-01).
+    [Header (56)] [Metadata (256)] [Chapters (N*96)] [Index] [Data]
+    """
+    if toc is None:
+        toc = []
+        
+    blobs = []
+    print(f"  Encoding {len(png_paths)} pages ({mode})...", end=" ", flush=True)
+    
+    for p in png_paths:
+        try:
+            img = Image.open(p)
+            if mode == "2bit":
+                blobs.append(png_to_xth_bytes(img))
+            else:
+                blobs.append(png_to_xtg_bytes(img))
+        except Exception as e:
+            print(f"Error encoding {p}: {e}")
+            return False
+
+    page_count = len(blobs)
+    
+    # Offsets based on Specification
+    header_size = 56
+    metadata_size = 256
+    chapter_count = len(toc)
+    chapter_entry_size = 96
+    chapters_size = chapter_count * chapter_entry_size
+    index_entry_size = 16
+    index_size = page_count * index_entry_size
+    
+    metadata_offset = header_size
+    chapter_offset = metadata_offset + metadata_size
+    index_offset = chapter_offset + chapters_size
+    data_offset = index_offset + index_size
+
+    # Index table: <Q I H H> per page
+    index_table = bytearray()
+    rel_offset = data_offset
+    
+    for blob in blobs:
+        # Extract w, h from blob header (offset 4, 2 unsigned shorts)
+        w, h = struct.unpack_from("<HH", blob, 4)
+        entry = struct.pack("<Q I H H", rel_offset, len(blob), w, h)
+        index_table += entry
+        rel_offset += len(blob)
+
+    # Magic: XTCH for 2bit, XTC\0 for 1bit
+    magic = b"XTCH" if mode == "2bit" else b"XTC\x00"
+
+    # XTC header: <4sHHBBBBIQQQQQ> little-endian (56 bytes)
+    xtc_header = struct.pack(
+        "<4sHHBBBBIQQQQQ",
+        magic,
+        1,              # version
+        page_count,
+        0,              # readDirection (0=L-R)
+        1,              # hasMetadata
+        0,              # hasThumbnails
+        1 if chapter_count > 0 else 0,  # hasChapters
+        1,              # currentPage (1-indexed)
+        metadata_offset,
+        index_offset,
+        data_offset,
+        0,              # reserved (thumbOffset)
+        chapter_offset
+    )
+    
+    # Metadata Block (256 bytes)
+    # Spec: 0x00 title (128), 0x80 author (64), 0xC0 publisher (32), 0xE0 language (16)
+    #       0xF0 createTime (4), 0xF4 coverPage (2), 0xF6 chapterCount (2), 0xF8 reserved (8)
+    metadata = bytearray(256)
+    title = os.path.basename(out_path).encode('utf-8')[:127]
+    metadata[0:len(title)] = title
+    
+    # Timestamp at 240 (0xF0)
+    timestamp = int(time.time())
+    struct.pack_into("<I", metadata, 240, timestamp)
+    # Chapter count at 246 (0xF6)
+    struct.pack_into("<H", metadata, 246, chapter_count)
+    
+    # Chapters Block
+    chapters = bytearray(chapters_size)
+    for i, entry in enumerate(toc):
+        # Entry size 96: Title (80), StartPage (2), EndPage (2), Padding
+        title_bytes = entry['title'].encode('utf-8')[:78]
+        pos = i * chapter_entry_size
+        chapters[pos : pos + len(title_bytes)] = title_bytes
+        # Hardware/Encoder.js observation: uses 1-based indexing for jump destination
+        start_pg = entry['page']
+        end_pg = entry.get('end', start_pg)
+        struct.pack_into("<H", chapters, pos + 80, start_pg) 
+        struct.pack_into("<H", chapters, pos + 82, end_pg) 
+
+    with open(out_path, "wb") as f:
+        f.write(xtc_header)
+        f.write(metadata)
+        f.write(chapters)
+        f.write(index_table)
+        for blob in blobs:
+            f.write(blob)
+            
+    print("✓")
+    return True
 
 
 def optimize_image(img_data, output_path_base, page_num, suffix=""):
@@ -68,18 +406,18 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
     - Split image in half or overlapping thirds horizontally
     - Rotate each half 90° clockwise
     - Resize to fit 480x800 with white padding
-    - Convert to grayscale
+    - Convert to grayscale/2-bit
     - Save as PNG (for XTC conversion)
     """
     try:
         from io import BytesIO
         uncropped_img = Image.open(BytesIO(img_data))
 
-        if suffix == ".1":
+        if suffix == "_s1":
             #left half of a spread
             width, height = uncropped_img.size
             uncropped_img = uncropped_img.crop((int(0/100.0*width), int(0/100.0*height), width-int(50/100.0*width), height-int(0/100.0*height)))
-        if suffix == ".2":
+        if suffix == "_s2":
             #right half of a spread
             width, height = uncropped_img.size
             uncropped_img = uncropped_img.crop((int(50/100.0*width), int(0/100.0*height), width-int(0/100.0*width), height-int(0/100.0*height)))
@@ -105,13 +443,17 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
             if str(page_num) in SAMPLE_PAGES:
                 if uncropped_img.mode != 'L':
                     uncropped_img = uncropped_img.convert('L')
-                font = ImageFont.load_default(size=100)
+                
+                try:
+                    font = ImageFont.load_default(size=100)
+                except:
+                    font = ImageFont.load_default()
+
                 text_color = 0
                 box_color = 255
                 print("creating samples for page:",page_num)
                 width, height = uncropped_img.size
                 text_position = (width//8,height//2)
-                # box_position = [(width//8)-10, (height//2)-10, (width//8)+200, (height//2)+40]
                 box_position = ((width//8)-30, (height//2), (width//8)+496, (height//2)+120)
                 width_proportion = width / 800
                 overlapping_third_height = 480 * width_proportion // 1
@@ -144,7 +486,6 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                     crop_set += 0.5
             else:
                 pass
-                # print("skipping page:",page_num)
             return 0
 
         #enhance contrast
@@ -162,12 +503,11 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                 black_cutoff = 3 * int(CONTRAST_VALUE)
                 white_cutoff = 3 + 9 * int(CONTRAST_VALUE)
                 uncropped_img = ImageOps.autocontrast(uncropped_img, cutoff=(black_cutoff,white_cutoff), preserve_tone=True)
-        else:
-            # nothing set, so we go with the default value of 4. 
-            black_cutoff = 3 * 4    # default, contrast level 4 = 12
-            white_cutoff = 3 + 9 * 4    # default, contrast level 4 = 39
-            uncropped_img = ImageOps.autocontrast(uncropped_img, cutoff=(black_cutoff,white_cutoff), preserve_tone=True)
-            # uncropped_img = ImageOps.autocontrast(uncropped_img, cutoff=(8,35), preserve_tone=True)
+        # else:
+            # Default contrast boost DISABLED (User requested "turn off contrast boost")
+            # black_cutoff = 3 * 4
+            # white_cutoff = 3 + 9 * 4
+            # uncropped_img = ImageOps.autocontrast(uncropped_img, cutoff=(black_cutoff,white_cutoff), preserve_tone=True)
 
         # Convert to grayscale
         if uncropped_img.mode != 'L':
@@ -222,7 +562,6 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
             if INCLUDE_OVERVIEWS or SIDEWAYS_OVERVIEWS or SELECT_OVERVIEWS:
                 if SELECT_OVERVIEWS and (str(page_num) not in SELECT_OV_PAGES):
                     pass
-                    # we're only doing overviews for some pages, and this one isn't one.
                 else:
                     # Process overview page
                     page_view = uncropped_img;
@@ -232,17 +571,9 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                     save_with_padding(page_view, output_page, padcolor=PADDING_COLOR)
 
             if OVERLAP or DESIRED_V_OVERLAP_SEGMENTS or SET_H_OVERLAP_SEGMENTS:
-                # DESIRED_V_OVERLAP_SEGMENTS = 3
-                # SET_H_OVERLAP_SEGMENTS = 1
-                # MINIMUM_V_OVERLAP_PERCENT = 5
-                # SET_H_OVERLAP_PERCENT = 75
-                # MAX_SPLIT_WIDTH = 80
-
                 number_of_h_segments = SET_H_OVERLAP_SEGMENTS
                 total_calculated_width = MAX_SPLIT_WIDTH * number_of_h_segments - int((number_of_h_segments - 1) * (MAX_SPLIT_WIDTH * 0.01 * SET_H_OVERLAP_PERCENT))
-                    # so, 1 = 800. 2 with 33% overlap = 1334, 3 with 33% overlap = 1868px, etc.
                 established_scale = total_calculated_width * 1.0 / width
-                    # so for 2000px wide source, 1= 0.4, 2=0.667, etc. 
 
                 overlapping_width = MAX_SPLIT_WIDTH / established_scale // 1
                 shiftover_to_overlap = 0
@@ -252,22 +583,13 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                 number_of_v_segments = DESIRED_V_OVERLAP_SEGMENTS - 1 
                 letter_keys = ["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"]
 
-                # width_proportion = width / 800
                 overlapping_height = 480 / established_scale // 1
                 shiftdown_to_overlap = 99999
                 while number_of_v_segments < 26 and (shiftdown_to_overlap * 1.0 / overlapping_height) > (1.0 - .01 * MINIMUM_V_OVERLAP_PERCENT):
-                    # iterate until we have a number of segments that cover the page with sufficient overlap.
-                    # the first iteration should fix the 99999 thing and set up our "base" attempt.
                     number_of_v_segments += 1
                     shiftdown_to_overlap = 0
                     if number_of_v_segments > 1:
                         shiftdown_to_overlap = overlapping_height - (overlapping_height * number_of_v_segments - height) // (number_of_v_segments - 1)
-
-                # # debugging math output
-                # print (f"width:{width}, height:{height}")
-                # print (f"overlapping_width:{overlapping_width}, overlapping_height:{overlapping_height}")
-                # print (f"shiftdown_to_overlap:{shiftdown_to_overlap}, shiftover_to_overlap:{shiftover_to_overlap}")
-                # print (f"established_scale:{established_scale}")
 
                 # Make overlapping segments that fill 800x480 screen.
                 v = 0
@@ -283,37 +605,6 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                         size = save_with_padding(segment_rotated, output, padcolor=PADDING_COLOR)
                         h += 1
                     v += 1
-
-
-                # # Make overlapping vertical column of full-width segments that fill screen.
-                # i = 0
-                # while i < number_of_segments:
-                #     segment = img.crop((0,shiftdown_to_overlap*i, width, height-(shiftdown_to_overlap*(number_of_segments-i-1))))
-                #     segment_rotated = segment.rotate(-90, expand=True)
-                #     output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[i]}.png"
-                #     size = save_with_padding(segment_rotated, output)
-                #     i += 1
-
-                # # Process top third
-                # top_third = img.crop((0, 0, width, overlapping_third_height))
-                # top_rotated = top_third.rotate(-90, expand=True)
-                # output_top = output_path_base.parent / f"{page_num:04d}{suffix}_3_a.png"
-                # size = save_with_padding(top_rotated, output_top)
-                # total_size += size;
-
-                # # Process middle third
-                # middle_third = img.crop((0, shiftdown_to_overlap, width, height - shiftdown_to_overlap))
-                # middle_rotated = middle_third.rotate(-90, expand=True)
-                # output_middle = output_path_base.parent / f"{page_num:04d}{suffix}_3_b.png"
-                # size = save_with_padding(middle_rotated, output_middle)
-                # total_size += size;
-
-                # # Process middle third
-                # bottom_third = img.crop((0, shiftdown_to_overlap*2, width, height))
-                # bottom_rotated = bottom_third.rotate(-90, expand=True)
-                # output_bottom = output_path_base.parent / f"{page_num:04d}{suffix}_3_c.png"
-                # size = save_with_padding(bottom_rotated, output_bottom)
-                # total_size += size;
 
             else:
                 # Process top half
@@ -331,14 +622,13 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                 total_size += size
         
         elif width >= height or str(page_num) in SPLIT_SPREADS_PAGES:
-            # Process wide page, or specifically split narrow page (rare, but for two-column layouts)
-            # top_half = img.crop((0, 0, width, half_height))
+            # Process wide page, or specifically split narrow page
             page_rotated = img.rotate(-90, expand=True)
             output_page = output_path_base.parent / f"{page_num:04d}{suffix}_0_spread.png"
             size = save_with_padding(page_rotated, output_page, padcolor=PADDING_COLOR)
             if SPLIT_SPREADS and (SPLIT_SPREADS_PAGES[0] == "all" or str(page_num) in SPLIT_SPREADS_PAGES):
-                splitLeft = optimize_image(img_data, output_path_base, page_num, suffix=suffix+".1")
-                splitRight = optimize_image(img_data, output_path_base, page_num, suffix=suffix+".2")
+                splitLeft = optimize_image(img_data, output_path_base, page_num, suffix=suffix+"_s1")
+                splitRight = optimize_image(img_data, output_path_base, page_num, suffix=suffix+"_s2")
             total_size += size
         else: 
             # This is a dont-split page, treat like overview page
@@ -357,8 +647,8 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
 
 def save_with_padding(img, output_path, *, padcolor=255):
     """
-    Resize image to fit within 480x800 and add white padding
-    Optionally apply dithering for better B&W conversion
+    Resize image to fit within 480x800 and add white padding.
+    Applies 1-bit or 2-bit conversion with selected dithering.
     """
     img_width, img_height = img.size
     scale = min(TARGET_WIDTH / img_width, TARGET_HEIGHT / img_height)
@@ -366,14 +656,7 @@ def save_with_padding(img, output_path, *, padcolor=255):
     new_width = int(img_width * scale)
     new_height = int(img_height * scale)
     
-    img_resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-    
-    # Apply dithering if enabled (for better grayscale → B&W conversion)
-    if USE_DITHERING:
-        # Convert to 1-bit with Floyd-Steinberg dithering
-        img_resized = img_resized.convert('1', dither=Image.Dither.FLOYDSTEINBERG)
-        # Convert back to grayscale mode so we can paste on white background
-        img_resized = img_resized.convert('L')
+    img_resized = img.resize((new_width, new_height), Image.Resampling.BICUBIC)
     
     # Create background (default padcolor is white)
     result = Image.new('L', (TARGET_WIDTH, TARGET_HEIGHT), color=padcolor)
@@ -383,9 +666,132 @@ def save_with_padding(img, output_path, *, padcolor=255):
     y = (TARGET_HEIGHT - new_height) // 2
     
     result.paste(img_resized, (x, y))
+    
+    # Apply Color Inversion if requested (Fixes inverted inputs)
+    if INVERT_COLORS:
+        result = ImageOps.invert(result)
+    
+    # Apply gamma correction if needed
+    if GAMMA_VALUE != 1.0:
+        # gamma < 1.0 brightens, > 1.0 darkens
+        # Pre-calculate LUT for performance
+        lut = [int(((i / 255.0) ** GAMMA_VALUE) * 255.0) for i in range(256)]
+        result = result.point(lut)
+
+    # Apply dithering/conversion logic
+    if XTC_MODE == "2bit":
+        # 2-bit conversion (4 levels)
+        
+        if DITHER_ALGO == 'none':
+            # Use direct thresholding (LUT) for clean, sharp output (Best for text)
+            lut = []
+            for i in range(256):
+                if i < 42:
+                    val = 0     # Black
+                elif i < 127:
+                    val = 85    # Dark Gray
+                elif i < 212:
+                    val = 170   # Light Gray
+                else:
+                    val = 255   # White
+                lut.append(val)
+            result = result.point(lut)
+        
+        elif DITHER_ALGO == 'atkinson':
+            # Custom Atkinson Dithering
+            # Process in RGB space? No, Atkinson is usually single-channel error diffusion.
+            # result is 'L' mode here.
+            result = dither_atkinson(result, levels=[0, 85, 170, 255])
+            
+        else:
+            # Use Floyd-Steinberg Dithering (Best for photos/gradients)
+            # Create a 4-color palette image
+            pal_img = Image.new("P", (1, 1))
+            pal_img.putpalette([0,0,0, 85,85,85, 170,170,170, 255,255,255] + [0,0,0]*252)
+            
+            # Force Floyd-Steinberg if not 'none' (PIL quantize mainly supports FS)
+            # To improve quality, ensure we process in RGB then quantize.
+            # Converting to RGB first is CRITICAL: quantization behaves differently/incorrectly on 'L' images.
+            result_rgb = result.convert('RGB')
+            result = result_rgb.quantize(palette=pal_img, dither=Image.Dither.FLOYDSTEINBERG)
+            result = result.convert('L')
+        
+    else:
+        # 1-bit conversion (Default)
+        if DITHER_ALGO == 'atkinson':
+            result = dither_atkinson(result, levels=[0, 255])
+            # Convert to 1-bit (threshold 128) just to be safe/compliant with '1' mode expectation?
+            # Actually, dither_atkinson returns L with values 0 or 255.
+            # We can convert to '1' with dither=NONE to pack it.
+            result = result.convert('1', dither=Image.Dither.NONE)
+        else:
+            dither_mode = DITHER_MAP.get(DITHER_ALGO, Image.Dither.FLOYDSTEINBERG)
+            result = result.convert('1', dither=dither_mode)
+        
+        # Convert back to grayscale
+        result = result.convert('L')
+
     result.save(output_path, 'PNG', optimize=True)
     
     return output_path.stat().st_size
+
+
+def extract_pdf_to_png(pdf_path, temp_dir):
+    """
+    Extract PDF to PNGs using pdftoppm (poppler-utils)
+    """
+    if not shutil.which("pdftoppm"):
+        print("  ✗ Error: pdftoppm not found. Please install poppler-utils.")
+        return None
+
+    pdf_name = pdf_path.stem
+    output_folder = temp_dir / pdf_name
+    output_folder.mkdir(parents=True, exist_ok=True)
+    
+    print(f"  Extracting PDF pages...", end=" ", flush=True)
+    
+    # Create a raw directory for initial extraction
+    raw_dir = output_folder / "_raw_extract"
+    raw_dir.mkdir(exist_ok=True)
+    prefix = raw_dir / "page"
+    
+    try:
+        # pdftoppm -png input.pdf output_prefix
+        cmd = ["pdftoppm", "-png", str(pdf_path), str(prefix)]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"✗ Error extracting PDF: {result.stderr}")
+            return None
+            
+        # Get generated files
+        generated_files = list(raw_dir.glob("page-*.png"))
+        
+        if not generated_files:
+            print(f"✗ No images extracted from {pdf_name}")
+            return None
+            
+        # Sort naturally (page-1, page-2, ... page-10)
+        generated_files.sort(key=lambda f: int(f.stem.split('-')[-1]))
+        
+        print(f"✓ ({len(generated_files)} pages)")
+        
+        # Process extracted images
+        for idx, img_file in enumerate(generated_files, 1):
+            with open(img_file, "rb") as f:
+                img_data = f.read()
+            
+            output_base = output_folder / f"{idx:04d}"
+            optimize_image(img_data, output_base, idx)
+            
+        # Clean up raw directory
+        shutil.rmtree(raw_dir)
+        
+        return output_folder
+        
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        return None
 
 
 def extract_cbz_to_png(cbz_path, temp_dir):
@@ -401,7 +807,7 @@ def extract_cbz_to_png(cbz_path, temp_dir):
         with zipfile.ZipFile(cbz_path, 'r') as zip_ref:
             file_list = zip_ref.namelist()
             image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp')
-            os_metadata_exclusions = ('__macos') # .cbzs made on Macs sometimes have mac-specific metadata in a __macos directory.
+            os_metadata_exclusions = ('__macos') 
             image_files = [f for f in file_list if f.lower().endswith(image_extensions) and not f.lower().startswith(os_metadata_exclusions)]
             image_files.sort()
 
@@ -424,68 +830,101 @@ def extract_cbz_to_png(cbz_path, temp_dir):
         return None
 
 
-def convert_png_folder_to_xtc(png_folder, output_file):
+def convert_png_folder_to_xtc(png_folder, output_file, source_file=None):
     """
-    Convert folder of PNGs to XTC using png2xtc.py
+    Convert folder of PNGs to XTC using internal encoder.
+    Generates TOC for chapter navigation.
     """
-    png2xtc_path = find_png2xtc()
-    
-    if not png2xtc_path:
-        print(f"  ✗ Error: png2xtc.py not found")
-        print(f"     Please install epub2xtc or set PNG2XTC_PATH environment variable")
+    # Get all PNG files
+    png_files = sorted(png_folder.glob("*.png"))
+    if not png_files:
+        print(f"  ✗ No PNG files found in {png_folder}")
         return False
+
+    # Build mapping from original page number to first and last segment index
+    page_ranges = {}
+    for idx, p in enumerate(png_files, 1):
+        try:
+            # Filename format: {page_num:04d}{suffix}_{type}_...
+            m = re.match(r'^(\d+)', p.name)
+            if not m: continue
+            orig_page = int(m.group(1))
+            
+            if orig_page not in page_ranges:
+                page_ranges[orig_page] = {'start': idx, 'end': idx}
+            else:
+                page_ranges[orig_page]['end'] = idx
+        except (ValueError, IndexError):
+            continue
+
+    # Generate TOC
+    toc = []
+    page_titles = {}
+    if source_file and source_file.suffix.lower() == '.cbz':
+        page_titles = get_cbz_bookmarks(source_file)
     
+    # Create TOC entry for every original page
+    for orig_page in sorted(page_ranges.keys()):
+        title = f"Page {orig_page}"
+        if orig_page in page_titles:
+            title = f"{title} - {page_titles[orig_page]}"
+            
+        toc.append({
+            "title": title,
+            "page": page_ranges[orig_page]['start'],
+            "end": page_ranges[orig_page]['end']
+        })
+
     try:
-        # print("trying path:",str(png2xtc_path))
-        result = subprocess.run(
-            ["python", str(png2xtc_path), str(png_folder), str(output_file)],
-            # I had to use the following instead to make this work on my Mac.
-            # ["python3", str(png2xtc_path) + "/png2xtc.py", str(png_folder), str(output_file)],
-            capture_output=True,
-            text=True,
-            timeout=300  # 5 minute timeout
-        )
+        # Use internal encoder
+        success = build_xtc_internal(png_files, output_file, mode=XTC_MODE, toc=toc)
         
-        if result.returncode == 0 and output_file.exists():
+        if success and output_file.exists():
             size_mb = output_file.stat().st_size / 1024 / 1024
-            print(f"  ✓ Created {output_file.name} ({size_mb:.1f}MB)")
+            print(f"  ✓ Created {output_file.name} ({size_mb:.1f}MB) with {len(toc)} chapters")
             return True
         else:
-            print(f"  ✗ Conversion failed: {result.stderr}")
+            print(f"  ✗ Conversion failed")
             return False
             
-    except subprocess.TimeoutExpired:
-        print(f"  ✗ Conversion timed out")
-        return False
     except Exception as e:
         print(f"  ✗ Error: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
-def process_cbz_file(cbz_path, output_dir, temp_dir, clean_temp, file_num=None, total_files=None):
+def process_file(file_path, output_dir, temp_dir, clean_temp, file_num=None, total_files=None):
     """
-    Full pipeline: CBZ → PNG → XTC
+    Full pipeline: File (CBZ/PDF) → PNG → XTC
     """
     progress_prefix = f"[{file_num}/{total_files}] " if file_num and total_files else ""
-    print(f"\n{progress_prefix}Processing: {cbz_path.name}")
+    print(f"\n{progress_prefix}Processing: {file_path.name}")
     
     start_time = time.time()
     
     # Step 1: Extract and optimize to PNG
-    png_folder = extract_cbz_to_png(cbz_path, temp_dir)
+    if file_path.suffix.lower() == '.pdf':
+        png_folder = extract_pdf_to_png(file_path, temp_dir)
+    else:
+        png_folder = extract_cbz_to_png(file_path, temp_dir)
+        
     if not png_folder:
-        return False, cbz_path.name, 0
+        return False, file_path.name, 0
     
     # Step 2: Convert to XTC
-    output_file = output_dir / f"{cbz_path.stem}.xtc"
-    success = convert_png_folder_to_xtc(png_folder, output_file)
+    # Use .xtch extension for 2-bit mode, .xtc for 1-bit
+    ext = ".xtch" if XTC_MODE == "2bit" else ".xtc"
+    output_file = output_dir / f"{file_path.stem}{ext}"
+    
+    success = convert_png_folder_to_xtc(png_folder, output_file, source_file=file_path)
     
     # Step 3: Clean up temp files if requested
     if clean_temp and png_folder.exists():
         shutil.rmtree(png_folder)
     
     elapsed = time.time() - start_time
-    return success, cbz_path.name, elapsed
+    return success, file_path.name, elapsed
 
 
 def main():
@@ -495,18 +934,25 @@ def main():
     
     # Check for help flag
     if "--help" in sys.argv or "-h" in sys.argv:
-        print("\nConverts CBZ manga files to XTC format optimized for XTEink X4")
+        print("\nConverts CBZ manga and PDF files to XTC format optimized for XTEink X4")
         print("\nUsage:")
         print("  cbz2xtc                           # Process current directory")
         print("  cbz2xtc /path/to/folder           # Process specific folder")
-        print("  cbz2xtc --no-dither               # Disable dithering")
+        print("  cbz2xtc --no-dither               # Disable dithering (threshold)")
+        print("  cbz2xtc --dither <algo>           # Select dithering: floyd, ordered, rasterize, none")
+        print("  cbz2xtc --2bit                    # Use 2-bit (4-level) grayscale mode (outputs .xtch)")
+        print("  cbz2xtc --gamma <float>           # Adjust brightness (0.5 = brighter, 1.0 = normal)")
+        print("  cbz2xtc --invert                  # Invert colors (White <-> Black)")
         print("  cbz2xtc --clean                   # Auto-delete temp PNG files")
-        print("  cbz2xtc --no-dither --clean       # Combine options")
+        print("\nDithering Algorithms:")
+        print("  floyd      - Floyd-Steinberg (Default, smooth)")
+        print("  ordered    - Ordered/Bayer (Grid pattern)")
+        print("  rasterize  - Halftone style")
+        print("  none       - Pure threshold")
         print("\nOptions:")
-        print("  --no-dither   Disable Floyd-Steinberg dithering. By default,")
-        print("                dithering is ENABLED for better grayscale to")
-        print("                black & white conversion. Use this flag for pure")
-        print("                threshold conversion (sharper for clean line art).")
+        print("  --no-dither   Same as --dither none")
+        print("  --2bit        Output 2-bit grayscale XTCH files instead of 1-bit XTC.")
+        print("                (Dithering works with 2-bit mode too)")
         print("\n  --overlap     Split into 3 overlapping screen-filling pieces instead")
         print("                of 2 non-overlapping pieces that may leave margins.")
         print("\n  --split-spreads all or <pagenum> or <pagenum,pagenum,pagenum...>")
@@ -518,92 +964,30 @@ def main():
         print("\n  --skip <pagenum> or <pagenum,pagenum,pagenum...>   skips page")
         print("                or pages entirely.")
         print("\n  --only <pagenum> or <pagenum,pagenum,pagenum...>   only renders")
-        print("                the selected page or pages. Tip: If you don't use")
-        print("                --clean, this can be used to rerender a problematic")
-        print("                page or pages with different settings than the rest.")
+        print("                the selected page or pages.")
         print("\n  --dont-split <pagenum> or <pagenum,pagenum,pagenum...>   don't split")
-        print("                page or pages, will use an overview instead (vertical if")
-        print("                --sideways-overviews is unset.) For covers and splash pages.")
-        print("\n  --contrast-boost <0-8> or <#,#>   Enhances contrast by clipping off,")
-        print("                brightest and darkest parts of the image. 0=no boost,")
-        print("                4=strong (default), 6=very strong, 8=insane. If you")
-        print("                specify two values with a comma, the first will be used")
-        print("                for dark parts, and the second for light parts.")
-        print("                in general, text will be more readable by increasing")
-        print("                dark contrast, and images will gain clarity by")
-        print("                increasing light contrast.")
+        print("                page or pages, will use an overview instead.")
+        print("\n  --contrast-boost <0-8> or <#,#>   Enhances contrast.")
         print("\n  --margin auto or <float> or <left,top,right,bottom>   crops off")
         print("                page margins by a percentage of the width or height.")
-        print("                Use a single number to crop from all sides equally, or")
-        print("                specify the cropping for each side in LTRB order.")
-        print("                '--margin auto' trims white space from all 4 sides.")
-        print("                (margin crop is not applied to overview pages.)")
         print("\n  --include-overviews   Show an overview of each page before the")
         print("                split pieces.")
-        print("\n  --sideways-overviews   Show a rotated overview of each page before")
-        print("                the split pieces. (better quality, but will require)")
-        print("                reader to turn their device sideways)")
-        print("\n  --select-overviews <pagenum> or <pagenum,pagenum,pagenum...>  Add")
-        print("                overview pages for only the specified pages instead of")
-        print("                for all pages. Will use vertical overviews if")
-        print("                --sideways-overviews is unset. (--dont-split's listed")
-        print("                pagenums will still automatically get overviews and")
-        print("                don't need to be listed here again.)")
+        print("\n  --sideways-overviews   Show a rotated overview of each page.")
+        print("\n  --select-overviews <pagenum> ...  Add overview pages for specific pages.")
         print("\n  --start <pagenum>   Don't process pages before this page.")
         print("\n  --stop <pagenum>    Don't process pages after this page.")
         print("\n  --pad-black   Pad things that don't fill screen with black instead")
         print("\n  --hsplit-count <#>   Split page horizontally into # segments.")
-        print("\n  --hsplit-overlap <float>   horizontal overlap between segments in")
-        print("                percent. Default is 70 percent. Lowering this value will")  
-        print("                almost always result in automatically splitting the page")  
-        print("                vertically into more than 3 segments.")
-        print("\n  --hsplit-max-width <#>   limit the width of horizontal segments")
-        print("                to less than full screen. (allows for lower amounts of")
-        print("                overlap without requiring extra vertical segmentation.)")
+        print("\n  --hsplit-overlap <float>   horizontal overlap between segments.")
+        print("\n  --hsplit-max-width <#>   limit the width of horizontal segments.")
         print("\n  --vsplit-target <#>   try to split page vertically into # segments.")
-        print("                if this would result it missing data or insufficient")
-        print("                overlap of segments, it will automatically add more.")           
         print("\n  --vsplit-min-overlap <float>   minimum vertical overlap between segments.")
-        print("                in percent. Default is 5 percent.")  
-        print("\n  --sample-set <pagenum> or <pagenum,pagenum,pagenum...>  Build a")
-        print("                spread of contrast and margin samples for a page or")
-        print("                list of pages. Useful for evaluating what settings")
-        print("                you want to use. Does contrasts 0-8, margin 0-10 percent")
-        print("\n  --clean       Automatically delete temporary PNG files after")
-        print("                conversion. Saves disk space and prevents leftover")
-        print("                files from interfering with conversions using different")
-        print("                split or overview settings.")
+        print("\n  --sample-set <pagenum> ...  Build a spread of contrast samples.")
+        print("\n  --clean       Automatically delete temporary PNG files after conversion.")
         print("\n  --help, -h    Show this help message")
-        print("\nWhat it does:")
-        print("  1. Extracts images from CBZ files")
-        print("  2. Splits each page in half and rotates 90°")
-        print("  3. Resizes to 480×800 with white padding")
-        print("  4. Converts to grayscale PNG (with dithering by default)")
-        print("  5. Converts PNG to XTC format (fast loading!)")
-        print("  6. Uses multithreading (up to 4 parallel conversions)")
-        print("\nOutput:")
-        print("  - XTC files saved to: ./xtc_output/")
-        print("  - Temp PNGs saved to: ./.temp_png/ (unless --clean)")
-        print("\nExamples:")
-        print("  cbz2xtc                           # Basic conversion (with dithering)")
-        print("  cbz2xtc --clean                   # With cleanup")
-        print("  cbz2xtc --no-dither               # Without dithering")
-        print("  cbz2xtc --contrast 3,5 --margin 5,3.5,5,3.5 --split-spreads all")
-        print("                     # good trial settings for a mainstream comic.")
-        print("  cbz2xtc --dont-split 1            # show cover as single image")
-        print("  cbz2xtc --sideways-overviews --dont-split 17 --select-overviews 19,24")
-        print("                     # A sideways overview will be used instead of splits")
-        print("                     # for page 17, and a sideways overview will come")
-        print("                     # before the splits for pages 19 and 24.")
-        print("  cbz2xtc --overlap --hsplit-count 2 --hsplit-overlap 25 --hsplit-max-width 600")
-        print("                     # split the page horizontally as well as vertically,")
-        print("                     # with a slight overlap, only using 600px screen width on")
-        print("                     # target device for the segmented pieces.")
-        print("  cbz2xtc D:\\manga --clean          # Specific folder + cleanup")
         return 0
     
     # Parse arguments
-    global USE_DITHERING
     global OVERLAP
     global SPLIT_SPREADS
     global SPLIT_SPREADS_PAGES
@@ -632,10 +1016,46 @@ def main():
     global SAMPLE_SET
     global SAMPLE_PAGES
     global PADDING_COLOR
+    
+    # New globals
+    global XTC_MODE
+    global DITHER_ALGO
+    global GAMMA_VALUE
+    global INVERT_COLORS
 
 
     clean_temp = "--clean" in sys.argv
-    USE_DITHERING = "--no-dither" not in sys.argv  # Inverted logic
+    INVERT_COLORS = "--invert" in sys.argv
+    
+    if "--gamma" in sys.argv:
+        try:
+            idx = sys.argv.index("--gamma")
+            GAMMA_VALUE = float(sys.argv[idx + 1])
+        except (ValueError, IndexError):
+            print("Warning: Invalid value for --gamma, using default 1.0")
+    
+    # Handle dithering args
+    if "--no-dither" in sys.argv:
+        DITHER_ALGO = "none"
+    else:
+        # Check for --dither <val>
+        if "--dither" in sys.argv:
+            try:
+                idx = sys.argv.index("--dither")
+                if idx + 1 < len(sys.argv) and not sys.argv[idx+1].startswith("--"):
+                    val = sys.argv[idx + 1].lower()
+                    if val in DITHER_MAP:
+                        DITHER_ALGO = val
+                    else:
+                        print(f"Warning: Unknown dither algo '{val}', using default 'floyd'")
+                else:
+                    print("Warning: --dither flag missing value, using default")
+            except IndexError:
+                print("Warning: --dither flag missing value, using default")
+    
+    if "--2bit" in sys.argv:
+        XTC_MODE = "2bit"
+
     OVERLAP = "--overlap" in sys.argv
     SPLIT_SPREADS = "--split-spreads" in sys.argv
     SPLIT_ALL = "--split-all" in sys.argv
@@ -643,7 +1063,7 @@ def main():
     ONLY_ON = "--only" in sys.argv
     DONT_SPLIT = "--dont-split" in sys.argv
     CONTRAST_BOOST = "--contrast-boost" in sys.argv
-    MARGIN = "--margin" in sys.argv or "--margins" in sys.argv # being nice since easy mistake.
+    MARGIN = "--margin" in sys.argv or "--margins" in sys.argv
     INCLUDE_OVERVIEWS = "--include-overviews" in sys.argv
     SIDEWAYS_OVERVIEWS = "--sideways-overviews" in sys.argv
     SELECT_OVERVIEWS = "--select-overviews" in sys.argv
@@ -665,80 +1085,70 @@ def main():
     if "--pad-black" in sys.argv:
         PADDING_COLOR = 0
 
-    # args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
-    
+    # Parse value args (reuse loop from original)
     i = 1
     args = []
     while i < len(sys.argv):
         arg = sys.argv[i]
-        if arg == "--split-spreads":
-            SPLIT_SPREADS_PAGES = sys.argv[i+1].split(',')
-            print("Will split spread pages:", SPLIT_SPREADS_PAGES)
-            # skip the next arg, as it's split spread pages parameter.
-            i += 1
+        # Skip value args we already handled or boolean args
+        if arg in ["--dither", "--2bit", "--no-dither", "--clean", "--overlap", "--split-all", "--pad-black", "--include-overviews", "--sideways-overviews", "--gamma", "--invert"]:
+            if arg == "--dither" or arg == "--gamma":
+                 i += 1 # skip value
+            # booleans are already handled
+        elif arg == "--split-spreads":
+            if i+1 < len(sys.argv) and not sys.argv[i+1].startswith("--"):
+                 SPLIT_SPREADS_PAGES = sys.argv[i+1].split(',')
+                 i += 1
+            else:
+                 SPLIT_SPREADS_PAGES = ["all"]
         elif arg == "--skip":
             SKIP_PAGES = sys.argv[i+1].split(',')
-            print("Will skip pages:", SKIP_PAGES)
-            # skip the next arg, as it's skip pages parameter.
             i += 1
         elif arg == "--only":
             ONLY_PAGES = sys.argv[i+1].split(',')
-            print("Will only do pages:", ONLY_PAGES)
-            i += 1 #skip next arg
+            i += 1
         elif arg == "--dont-split":
             DONT_SPLIT_PAGES = sys.argv[i+1].split(',')
-            print("Will not split pages:", DONT_SPLIT_PAGES)
-            i += 1 #skip next arg
+            i += 1
         elif arg == "--contrast-boost":
             CONTRAST_VALUE = sys.argv[i+1]
-            print("Contrast setting:", CONTRAST_VALUE)
-            i += 1 #skip next arg
+            i += 1
         elif arg == "--margin" or arg== "--margins":
             MARGIN_VALUE = sys.argv[i+1]
-            print("Margin setting:", MARGIN_VALUE)
-            i += 1 #skip next arg
+            i += 1
         elif arg == "--select-overviews":
             SELECT_OV_PAGES = sys.argv[i+1].split(',')
-            print("Overviews will be added for pages:", SELECT_OV_PAGES)
-            i += 1 #skip next arg
+            i += 1
         elif arg == "--start":
             START_PAGE = int(sys.argv[i+1])
-            print("Generation will start at page:", START_PAGE)
-            i += 1 #skip next arg
+            i += 1
         elif arg == "--stop":
             STOP_PAGE = int(sys.argv[i+1])
-            print("Generation will stop after page:", STOP_PAGE)
-            i += 1 #skip next arg
+            i += 1
         elif arg == "--vsplit-target":
-            OVERLAP = True  # even if not explicitly set.
+            OVERLAP = True 
             DESIRED_V_OVERLAP_SEGMENTS = int(sys.argv[i+1])
-            print("will try to verticallly split into ", DESIRED_V_OVERLAP_SEGMENTS, "segments")
-            i += 1 #skip next arg
+            i += 1
         elif arg == "--vsplit-min-overlap":
             MINIMUM_V_OVERLAP_PERCENT = float(sys.argv[i+1])
-            print("Minimum percentage overlap for vertical splits:", MINIMUM_V_OVERLAP_PERCENT)
-            i += 1 #skip next arg
+            i += 1
         elif arg == "--hsplit-count":
-            OVERLAP = True    # even if not explicitly set.
+            OVERLAP = True
             SET_H_OVERLAP_SEGMENTS = int(sys.argv[i+1])
-            print("will horizontally split into ", SET_H_OVERLAP_SEGMENTS, "segments")
-            i += 1 #skip next arg
+            i += 1
         elif arg == "--hsplit-overlap":
             SET_H_OVERLAP_PERCENT = float(sys.argv[i+1])
-            print("will do this percentage overlap for horizontal splits:", SET_H_OVERLAP_PERCENT)
-            i += 1 #skip next arg
+            i += 1
         elif arg == "--hsplit-max-width":
             MAX_SPLIT_WIDTH = int(sys.argv[i+1])
-            print("max width in pixels for horizontal splits:", MAX_SPLIT_WIDTH)
-            i += 1 #skip next arg
+            i += 1
         elif arg == "--sample-set":
             SAMPLE_PAGES = sys.argv[i+1].split(',')
-            print("Sample Mode for pages:", SAMPLE_PAGES)
-            i += 1 #skip next arg
+            i += 1
         elif arg.startswith("--"):
-            pass # do nothing, it's presumably boolean and handled above.
+            pass 
         else:
-            args.append(arg) # it's supposed to be a path.
+            args.append(arg)
         i += 1
 
     # Get input directory
@@ -752,14 +1162,12 @@ def main():
         return 1
     
     print(f"\nInput directory: {input_dir.absolute()}")
-    if USE_DITHERING:
-        print("Dithering: ENABLED (better for screentones/gradients)")
-    else:
-        print("Dithering: DISABLED (use --dither to enable)")
-    
-    # Determine number of threads
-    max_workers = min(4, os.cpu_count() or 1)  # Use up to 4 threads
-    print(f"Threads: {max_workers} (parallel processing)")
+    print(f"Mode: {XTC_MODE} ({'4-level grayscale' if XTC_MODE=='2bit' else '1-bit B&W'})")
+    print(f"Dithering: {DITHER_ALGO.upper()}")
+    if GAMMA_VALUE != 1.0:
+        print(f"Gamma: {GAMMA_VALUE}")
+    if INVERT_COLORS:
+        print("Invert Colors: ENABLED")
     
     # Create output and temp directories
     output_dir = input_dir / "xtc_output"
@@ -768,115 +1176,70 @@ def main():
     output_dir.mkdir(exist_ok=True)
     temp_dir.mkdir(exist_ok=True)
     
-    # Find all CBZ files (including in subdirectories)
-    cbz_files = []
+    # Find all files (CBZ/PDF)
+    input_files = []
     
     # Check current directory
-    cbz_files.extend(sorted(input_dir.glob("*.cbz")))
-    cbz_files.extend(sorted(input_dir.glob("*.CBZ")))
+    input_files.extend(sorted(input_dir.glob("*.cbz")))
+    input_files.extend(sorted(input_dir.glob("*.CBZ")))
+    input_files.extend(sorted(input_dir.glob("*.pdf")))
+    input_files.extend(sorted(input_dir.glob("*.PDF")))
     
-    # Only check subdirectories if no CBZ files found in current directory
-    if not cbz_files:
+    # Only check subdirectories if no files found in current directory
+    if not input_files:
         for subdir in input_dir.iterdir():
             if subdir.is_dir() and subdir.name not in ["xtc_output", ".temp_png"]:
-                cbz_files.extend(sorted(subdir.glob("*.cbz")))
-                cbz_files.extend(sorted(subdir.glob("*.CBZ")))
+                input_files.extend(sorted(subdir.glob("*.cbz")))
+                input_files.extend(sorted(subdir.glob("*.CBZ")))
+                input_files.extend(sorted(subdir.glob("*.pdf")))
+                input_files.extend(sorted(subdir.glob("*.PDF")))
     
-    # Remove any duplicates (shouldn't happen now, but just in case)
-    cbz_files = list(dict.fromkeys(cbz_files))
+    # Remove any duplicates
+    input_files = list(dict.fromkeys(input_files))
     
-    if not cbz_files:
-        print(f"\nNo CBZ files found in '{input_dir}' or its subdirectories")
+    if not input_files:
+        print(f"\nNo CBZ or PDF files found in '{input_dir}' or its subdirectories")
         return 1
     
-    print(f"\nFound {len(cbz_files)} CBZ file(s)")
+    print(f"\nFound {len(input_files)} file(s)")
     print(f"Output directory: {output_dir.absolute()}")
     print(f"Temp directory: {temp_dir.absolute()}")
     if clean_temp:
         print("Clean mode: Temporary files will be deleted after conversion")
     print("-" * 60)
     
-    # Verify png2xtc.py exists
-    png2xtc_path = find_png2xtc()
-    if not png2xtc_path:
-        print(f"\n✗ Error: png2xtc.py not found")
-        print(f"\nThe epub2xtc library is required to convert PNG to XTC format.")
-        print(f"Repository: https://github.com/jonasdiemer/epub2xtc")
-        
-        # Ask user if they want to clone it
-        try:
-            response = input("\nWould you like to clone epub2xtc now? (Y/n): ").strip().lower()
-            
-            if response in ['y', 'yes', '']:
-                # Determine where to clone
-                clone_dir = Path(__file__).parent / "epub2xtc"
-                
-                print(f"\nCloning to: {clone_dir}")
-                print("Running: git clone https://github.com/jonasdiemer/epub2xtc.git")
-                
-                result = subprocess.run(
-                    ["git", "clone", "https://github.com/jonasdiemer/epub2xtc.git", str(clone_dir)],
-                    capture_output=True,
-                    text=True
-                )
-                
-                if result.returncode == 0:
-                    print("✓ Successfully cloned epub2xtc!")
-                    print("\nPlease run cbz2xtc again.")
-                    return 0
-                else:
-                    print(f"✗ Failed to clone: {result.stderr}")
-                    print("\nPlease clone manually:")
-                    print("  git clone https://github.com/jonasdiemer/epub2xtc.git")
-                    return 1
-            else:
-                print("\nPlease install epub2xtc manually:")
-                print("  git clone https://github.com/jonasdiemer/epub2xtc.git")
-                print("\nOr set PNG2XTC_PATH environment variable to the location of png2xtc.py")
-                return 1
-                
-        except KeyboardInterrupt:
-            print("\n\nCancelled by user.")
-            return 1
-        except Exception as e:
-            print(f"\nError: {e}")
-            print("\nPlease install epub2xtc manually:")
-            print("  git clone https://github.com/jonasdiemer/epub2xtc.git")
-            return 1
+    # Internal encoder used, no need to check for png2xtc.py
     
-    print(f"Using png2xtc.py from: {png2xtc_path.parent}")
-    
-    # Process files with multithreading
+    max_workers = min(4, os.cpu_count() or 1)
+    print(f"Threads: {max_workers} (parallel processing)")
+
     start_time = time.time()
     success_count = 0
     total_time = 0
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
-        future_to_cbz = {
-            executor.submit(process_cbz_file, cbz_file, output_dir, temp_dir, clean_temp, idx, len(cbz_files)): cbz_file
-            for idx, cbz_file in enumerate(cbz_files, 1)
+        future_to_file = {
+            executor.submit(process_file, f, output_dir, temp_dir, clean_temp, idx, len(input_files)): f
+            for idx, f in enumerate(input_files, 1)
         }
         
-        # Process results as they complete
-        for future in as_completed(future_to_cbz):
+        for future in as_completed(future_to_file):
             success, filename, elapsed = future.result()
             if success:
                 success_count += 1
                 total_time += elapsed
                 avg_time = total_time / success_count
-                remaining = (len(cbz_files) - success_count) * avg_time
+                remaining = (len(input_files) - success_count) * avg_time
                 print(f"  ⏱  {elapsed:.1f}s | Est. remaining: {remaining/60:.1f}min")
     
     elapsed_total = time.time() - start_time
     
     print("-" * 60)
-    print(f"\nCompleted! Successfully converted {success_count}/{len(cbz_files)} files")
+    print(f"\nCompleted! Successfully converted {success_count}/{len(input_files)} files")
     print(f"Total time: {elapsed_total/60:.1f} minutes")
-    print(f"Average: {elapsed_total/len(cbz_files):.1f}s per file")
+    print(f"Average: {elapsed_total/len(input_files):.1f}s per file")
     print(f"\nXTC files are in: {output_dir.absolute()}")
     
-    # Clean up temp directory if empty or if clean mode
     if clean_temp:
         try:
             if temp_dir.exists():
@@ -886,11 +1249,10 @@ def main():
             pass
     else:
         print(f"Temporary PNG files are in: {temp_dir.absolute()}")
-        print("(Run with --clean flag to auto-delete temp files)")
     
-    print("\nTransfer the .xtc files to your XTEink X4!")
+    print("\nTransfer the .xtc/.xtch files to your XTEink X4!")
     
-    return 0 if success_count == len(cbz_files) else 1
+    return 0 if success_count == len(input_files) else 1
 
 
 if __name__ == "__main__":
