@@ -10,15 +10,22 @@ A collection of command-line tools to convert manga (CBZ), PDF files, and images
   - **Strict Standard Compliance** - Generates files strictly following the XTC v1.0 specification.
   - **Smart Chapter Navigation** -
     - **Folder-based Chapters**: Automatically names chapters based on folders inside CBZ (e.g., `Page 1 - The Beginning`).
-    - **Automatic Page Markers**: Every page gets a "Page X" marker for easy jumping.
-  - **Advanced Dithering** -
+    - **Automatic Page Markers**: Every page gets a "Page n" marker for easy jumping.
+  - **Dithering Options** -
     - **Atkinson**: sharp, clean shading.
-    - **Floyd-Steinberg**: Smooth gradients, corrected for 2-bit color space.
+    - **Floyd-Steinberg**: Smooth gradients.
     - **Ordered & Rasterize**: Classic patterns for distinct e-ink looks.
-  - **Precision Image Controls** -
+  - **Image Controls** -
     - **Gamma Correction**: Adjust midtone brightness (`--gamma 0.7`).
     - **Color Inversion**: Flip Black/White polarity (`--invert`).
   - **Multithreaded Speed** - Up to 4x processing using parallel workers.
+
+- **image2xth** - High-quality 2-bit XTH converter for individual images.
+  - Uses **Atkinson** dithering by default (sharpest results).
+  - Supports Floyd-Steinberg and pure quantization modes.
+  - Advanced scaling modes: `cover` (default), `letterbox`, `fill`, and `crop`.
+  - Customizable padding: `--pad white` (default) or `--pad black`.
+  - Ideal for high-quality e-ink backgrounds and wallpapers.
   
 - **image2bw** - Utility to convert individual images to 1-bit BMP for backgrounds.
 
@@ -84,7 +91,7 @@ pip install pillow numpy numba pymupdf
 ## 🙏 Credits
 
 - Original base tool by [tazua/cbz2xtc](https://github.com/tazua/cbz2xtc).
-- Technical specification from [bigbag/epub-to-xtc-converter](https://github.com/bigbag/epub-to-xtc-converter).
+- Technical specification and as reference from [bigbag/epub-to-xtc-converter](https://github.com/bigbag/epub-to-xtc-converter).
 
 ---
 
