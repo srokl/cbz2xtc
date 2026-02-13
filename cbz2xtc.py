@@ -547,16 +547,8 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
         
         # Handle landscape images (Spreads)
         is_landscape = width >= height
-        if is_landscape:
-            # Rotate landscape pages -90 first so they can be treated as tall portrait pages
-            img = img.rotate(-90, expand=True)
-            width, height = img.size
-
-        half_height = height // 2
-        total_size = 0
 
         # We split most pages that are vertical. 
-        # Since we just rotated landscape images, they are now vertical.
         should_this_split = True 
         
         if str(page_num) in SPLIT_SPREADS_PAGES:
@@ -572,19 +564,29 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
             should_this_split = False
 
         if should_this_split:
-            if INCLUDE_OVERVIEWS or SIDEWAYS_OVERVIEWS or SELECT_OVERVIEWS:
+            # Process overview page BEFORE splits (forced for landscape spreads)
+            if INCLUDE_OVERVIEWS or SIDEWAYS_OVERVIEWS or SELECT_OVERVIEWS or is_landscape:
                 if SELECT_OVERVIEWS and (str(page_num) not in SELECT_OV_PAGES):
                     pass
                 else:
                     # Process overview page
                     page_view = uncropped_img;
-                    # If it was landscape, it's already "sideways" in its natural state?
-                    # No, we want it rotated -90 to fill the 480x800 screen correctly.
-                    if not SIDEWAYS_OVERVIEWS:
+                    # Match orientation with splits: Portrait splits are -90, Landscape splits are 0
+                    # Portrait overviews are sideways (-90) by default, Landscape are upright (0) by default.
+                    if is_landscape == SIDEWAYS_OVERVIEWS:
                         page_view = uncropped_img.rotate(-90, expand=True)
                     output_page = output_path_base.parent / f"{page_num:04d}{suffix}_0_overview.png"
                     save_with_padding(page_view, output_page, padcolor=PADDING_COLOR)
 
+        if is_landscape:
+            # Rotate landscape pages -90 first so they can be treated as tall portrait pages
+            img = img.rotate(-90, expand=True)
+            width, height = img.size
+
+        half_height = height // 2
+        total_size = 0
+
+        if should_this_split:
             if OVERLAP or DESIRED_V_OVERLAP_SEGMENTS or SET_H_OVERLAP_SEGMENTS or is_landscape:
                 # Use overlapping segments (Force for landscape to ensure 3 pieces)
                 number_of_h_segments = SET_H_OVERLAP_SEGMENTS
@@ -613,7 +615,8 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                     h = 0
                     while h < number_of_h_segments:
                         segment = img.crop((shiftover_to_overlap*h, shiftdown_to_overlap*v, width-(shiftover_to_overlap*(number_of_h_segments-h-1)), height-(shiftdown_to_overlap*(number_of_v_segments-v-1))))
-                        segment_rotated = segment.rotate(-90, expand=True)
+                        # Fix upside down landscape splits by rotating 90 instead of -90 when base was already rotated -90
+                        segment_rotated = segment.rotate(90 if is_landscape else -90, expand=True)
                         if number_of_h_segments > 1:
                             output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v]}_{letter_keys[h]}.png"
                         else:
@@ -625,14 +628,14 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
             else:
                 # Process top half
                 top_half = img.crop((0, 0, width, half_height))
-                top_rotated = top_half.rotate(-90, expand=True)
+                top_rotated = top_half.rotate(90 if is_landscape else -90, expand=True)
                 output_top = output_path_base.parent / f"{page_num:04d}{suffix}_2_a.png"
                 size = save_with_padding(top_rotated, output_top, padcolor=PADDING_COLOR)
                 total_size += size
                 
                 # Process bottom half
                 bottom_half = img.crop((0, half_height, width, height))
-                bottom_rotated = bottom_half.rotate(-90, expand=True)
+                bottom_rotated = bottom_half.rotate(90 if is_landscape else -90, expand=True)
                 output_bottom = output_path_base.parent / f"{page_num:04d}{suffix}_2_b.png"
                 size = save_with_padding(bottom_rotated, output_bottom, padcolor=PADDING_COLOR)
                 total_size += size
@@ -640,7 +643,8 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
         else: 
             # This is a dont-split page, treat like overview page
             page_view = uncropped_img;
-            if not SIDEWAYS_OVERVIEWS:
+            # Match orientation with splits: Portrait splits are -90, Landscape splits are 0
+            if is_landscape == SIDEWAYS_OVERVIEWS:
                 page_view = uncropped_img.rotate(-90, expand=True)
             output_page = output_path_base.parent / f"{page_num:04d}{suffix}_0_overview.png"
             save_with_padding(page_view, output_page, padcolor=PADDING_COLOR)
