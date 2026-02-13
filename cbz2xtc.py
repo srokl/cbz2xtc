@@ -544,10 +544,21 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                 img = uncropped_img.crop((int(allaroundcrop/100.0*width), int(allaroundcrop/100.0*height), width-int(allaroundcrop/100.0*width), height-int(allaroundcrop/100.0*height)))
 
         width, height = img.size
+        
+        # Handle landscape images (Spreads)
+        is_landscape = width >= height
+        if is_landscape:
+            # Rotate landscape pages -90 first so they can be treated as tall portrait pages
+            img = img.rotate(-90, expand=True)
+            width, height = img.size
+
         half_height = height // 2
         total_size = 0
 
-        should_this_split = width < height  #we split most pages that are vertical.
+        # We split most pages that are vertical. 
+        # Since we just rotated landscape images, they are now vertical.
+        should_this_split = True 
+        
         if str(page_num) in SPLIT_SPREADS_PAGES:
             if suffix == "":  
                 # we haven't recursed, this is top level.
@@ -555,9 +566,7 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
             else:
                 # we have recursed.
                 should_this_split = True  #we can't recurse again, it's been halved, it must be split.
-        if SPLIT_ALL:  
-            #well, that's easy, we split!
-            should_this_split = True
+        
         if suffix == "" and str(page_num) in DONT_SPLIT_PAGES:  
             #also easy, we don't split. Overrides everything. (excepting recursion)
             should_this_split = False
@@ -569,12 +578,15 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                 else:
                     # Process overview page
                     page_view = uncropped_img;
+                    # If it was landscape, it's already "sideways" in its natural state?
+                    # No, we want it rotated -90 to fill the 480x800 screen correctly.
                     if not SIDEWAYS_OVERVIEWS:
                         page_view = uncropped_img.rotate(-90, expand=True)
                     output_page = output_path_base.parent / f"{page_num:04d}{suffix}_0_overview.png"
                     save_with_padding(page_view, output_page, padcolor=PADDING_COLOR)
 
-            if OVERLAP or DESIRED_V_OVERLAP_SEGMENTS or SET_H_OVERLAP_SEGMENTS:
+            if OVERLAP or DESIRED_V_OVERLAP_SEGMENTS or SET_H_OVERLAP_SEGMENTS or is_landscape:
+                # Use overlapping segments (Force for landscape to ensure 3 pieces)
                 number_of_h_segments = SET_H_OVERLAP_SEGMENTS
                 total_calculated_width = MAX_SPLIT_WIDTH * number_of_h_segments - int((number_of_h_segments - 1) * (MAX_SPLIT_WIDTH * 0.01 * SET_H_OVERLAP_PERCENT))
                 established_scale = total_calculated_width * 1.0 / width
@@ -625,15 +637,6 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                 size = save_with_padding(bottom_rotated, output_bottom, padcolor=PADDING_COLOR)
                 total_size += size
         
-        elif width >= height or str(page_num) in SPLIT_SPREADS_PAGES:
-            # Process wide page, or specifically split narrow page
-            page_rotated = img.rotate(-90, expand=True)
-            output_page = output_path_base.parent / f"{page_num:04d}{suffix}_0_spread.png"
-            size = save_with_padding(page_rotated, output_page, padcolor=PADDING_COLOR)
-            if SPLIT_SPREADS and (SPLIT_SPREADS_PAGES[0] == "all" or str(page_num) in SPLIT_SPREADS_PAGES):
-                splitLeft = optimize_image(img_data, output_path_base, page_num, suffix=suffix+"_s1")
-                splitRight = optimize_image(img_data, output_path_base, page_num, suffix=suffix+"_s2")
-            total_size += size
         else: 
             # This is a dont-split page, treat like overview page
             page_view = uncropped_img;
