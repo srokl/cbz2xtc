@@ -566,13 +566,14 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                 if number_of_h_segments > 1:
                     shiftover_to_overlap = overlapping_width - (overlapping_width * number_of_h_segments - width) // (number_of_h_segments - 1)
 
-                # For landscape spreads, we want at least 3 segments to ensure good zoom
+                # For landscape spreads, we want at least 3 segments to ensure good zoom and cover Right-to-Left reading
                 number_of_v_segments = (DESIRED_V_OVERLAP_SEGMENTS - 1) if not is_landscape else 2
                 letter_keys = ["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"]
 
                 overlapping_height = 480 / established_scale // 1
                 
                 # Ensure we have enough segments to cover the full height without gaps
+                # AND satisfy the minimum overlap requirement
                 shiftdown_to_overlap = 99999
                 while number_of_v_segments < 26:
                     number_of_v_segments += 1
@@ -581,7 +582,9 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                     else:
                         shiftdown_to_overlap = 0
                     
+                    # If shiftdown is less than overlapping_height, it means segments overlap (no gap)
                     if shiftdown_to_overlap <= overlapping_height:
+                        # Check if overlap is sufficient (at least MINIMUM_V_OVERLAP_PERCENT)
                         if (shiftdown_to_overlap * 1.0 / overlapping_height) <= (1.0 - .01 * MINIMUM_V_OVERLAP_PERCENT):
                             break
 
@@ -600,6 +603,7 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                         # Portrait segments are rotated -90 to be sideways.
                         segment_rotated = segment.rotate(90 if is_landscape else -90, expand=True)
                         
+                        # letter_keys[v_idx] ensures alphabetical order follows reading order
                         if number_of_h_segments > 1:
                             output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v_idx]}_{letter_keys[h]}.png"
                         else:
@@ -741,38 +745,62 @@ def save_with_padding(img, output_path, *, padcolor=255):
 
 def extract_pdf_to_png(pdf_path, temp_dir):
     """
-    Extract PDF to PNGs using PyMuPDF (fitz)
+    Extract PDF to PNGs using pdftoppm (poppler-utils)
     """
-    try:
-        import fitz
-    except ImportError:
-        print("  ✗ Error: PyMuPDF not found. Please run: pip install pymupdf")
+    if not shutil.which("pdftoppm"):
+        print("  ✗ Error: pdftoppm not found. Please install poppler-utils.")
         return None
 
     pdf_name = pdf_path.stem
     output_folder = temp_dir / pdf_name
     output_folder.mkdir(parents=True, exist_ok=True)
     
+    print(f"  Extracting and converting PDF pages...", end=" ", flush=True)
+    
+    # Create a raw directory for initial extraction
+    raw_dir = output_folder / "_raw_extract"
+    raw_dir.mkdir(exist_ok=True)
+    prefix = raw_dir / "page"
+    
     try:
-        doc = fitz.open(pdf_path)
-        print(f"  Extracting and converting {len(doc)} PDF pages...", end=" ", flush=True)
+        # pdftoppm -png input.pdf output_prefix
+        # Note: -j (parallel) is not supported in all poppler versions (e.g. Termux)
+        cmd = ["pdftoppm", "-png", str(pdf_path), str(prefix)]
+        result = subprocess.run(cmd, capture_output=True, text=True)
         
-        def process_pdf_page(idx, page, output_folder):
-            # Render page to image (default 72 DPI, usually enough for 480x800 target)
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # 2x scale for better quality before resizing
-            img_data = pix.tobytes("png")
+        if result.returncode != 0:
+            print(f"✗ Error extracting PDF: {result.stderr or result.stdout}")
+            return None
+            
+        # Get generated files
+        generated_files = list(raw_dir.glob("page-*.png"))
+        
+        if not generated_files:
+            print(f"✗ No images extracted from {pdf_name}")
+            return None
+            
+        # Sort naturally (page-1, page-2, ... page-10)
+        generated_files.sort(key=lambda f: int(f.stem.split('-')[-1]))
+        
+        # Process extracted images in parallel
+        def process_raw_page(idx, img_file, output_folder):
+            with open(img_file, "rb") as f:
+                img_data = f.read()
             output_base = output_folder / f"{idx:04d}"
             optimize_image(img_data, output_base, idx)
 
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
             futures = [
-                executor.submit(process_pdf_page, idx, doc[idx-1], output_folder)
-                for idx in range(1, len(doc) + 1)
+                executor.submit(process_raw_page, idx, img_file, output_folder)
+                for idx, img_file in enumerate(generated_files, 1)
             ]
             for _ in as_completed(futures):
                 pass
             
-        print(f"✓")
+        # Clean up raw directory
+        shutil.rmtree(raw_dir)
+        print(f"✓ ({len(generated_files)} pages)")
+        
         return output_folder
         
     except Exception as e:
@@ -1145,17 +1173,23 @@ def main():
             args.append(arg)
         i += 1
 
-    # Get input directory
+    # Get input path
     if args:
-        input_dir = Path(args[0])
+        input_path = Path(args[0])
     else:
-        input_dir = Path.cwd()
+        input_path = Path.cwd()
     
-    if not input_dir.exists():
-        print(f"Error: Directory '{input_dir}' does not exist")
+    if not input_path.exists():
+        print(f"Error: Path '{input_path}' does not exist")
         return 1
     
-    print(f"\nInput directory: {input_dir.absolute()}")
+    # Define directory for output/temp based on input
+    if input_path.is_file():
+        base_dir = input_path.parent
+    else:
+        base_dir = input_path
+
+    print(f"\nInput: {input_path.absolute()}")
     print(f"Mode: {XTC_MODE} ({'4-level grayscale' if XTC_MODE=='2bit' else '1-bit B&W'})")
     print(f"Dithering: {DITHER_ALGO.upper()}")
     if GAMMA_VALUE != 1.0:
@@ -1164,8 +1198,8 @@ def main():
         print("Invert Colors: ENABLED")
     
     # Create output and temp directories
-    output_dir = input_dir / "xtc_output"
-    temp_dir = input_dir / ".temp_png"
+    output_dir = base_dir / "xtc_output"
+    temp_dir = base_dir / ".temp_png"
     
     output_dir.mkdir(exist_ok=True)
     temp_dir.mkdir(exist_ok=True)
@@ -1173,20 +1207,24 @@ def main():
     # Find all files (CBZ/PDF)
     input_files = []
     
-    # Check current directory
-    input_files.extend(sorted(input_dir.glob("*.cbz")))
-    input_files.extend(sorted(input_dir.glob("*.CBZ")))
-    input_files.extend(sorted(input_dir.glob("*.pdf")))
-    input_files.extend(sorted(input_dir.glob("*.PDF")))
-    
-    # Only check subdirectories if no files found in current directory
-    if not input_files:
-        for subdir in input_dir.iterdir():
-            if subdir.is_dir() and subdir.name not in ["xtc_output", ".temp_png"]:
-                input_files.extend(sorted(subdir.glob("*.cbz")))
-                input_files.extend(sorted(subdir.glob("*.CBZ")))
-                input_files.extend(sorted(subdir.glob("*.pdf")))
-                input_files.extend(sorted(subdir.glob("*.PDF")))
+    if input_path.is_file():
+        if input_path.suffix.lower() in [".pdf", ".cbz"]:
+            input_files = [input_path]
+    else:
+        # Check current directory
+        input_files.extend(sorted(input_path.glob("*.cbz")))
+        input_files.extend(sorted(input_path.glob("*.CBZ")))
+        input_files.extend(sorted(input_path.glob("*.pdf")))
+        input_files.extend(sorted(input_path.glob("*.PDF")))
+        
+        # Only check subdirectories if no files found in current directory
+        if not input_files:
+            for subdir in input_path.iterdir():
+                if subdir.is_dir() and subdir.name not in ["xtc_output", ".temp_png"]:
+                    input_files.extend(sorted(subdir.glob("*.cbz")))
+                    input_files.extend(sorted(subdir.glob("*.CBZ")))
+                    input_files.extend(sorted(subdir.glob("*.pdf")))
+                    input_files.extend(sorted(subdir.glob("*.PDF")))
     
     # Remove any duplicates
     input_files = list(dict.fromkeys(input_files))
