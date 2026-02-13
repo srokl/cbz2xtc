@@ -40,7 +40,7 @@ TARGET_HEIGHT = 800
 
 # Global configuration (defaults)
 XTC_MODE = "1bit"        # "1bit" or "2bit"
-DITHER_ALGO = "floyd"    # "floyd", "ordered", "rasterize", "none"
+DITHER_ALGO = "atkinson"    # "floyd", "ordered", "rasterize", "none", "atkinson"
 GAMMA_VALUE = 1.0        # Gamma correction value (1.0 = neutral)
 INVERT_COLORS = False    # Invert colors (White <-> Black)
 
@@ -936,7 +936,8 @@ def main():
         print("  cbz2xtc --invert                  # Invert colors (White <-> Black)")
         print("  cbz2xtc --clean                   # Auto-delete temp PNG files")
         print("\nDithering Algorithms:")
-        print("  floyd      - Floyd-Steinberg (Default, smooth)")
+        print("  atkinson   - Atkinson (Default, sharp shading)")
+        print("  floyd      - Floyd-Steinberg (Smooth gradients)")
         print("  ordered    - Ordered/Bayer (Grid pattern)")
         print("  rasterize  - Halftone style")
         print("  none       - Pure threshold")
