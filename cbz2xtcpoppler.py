@@ -382,6 +382,8 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
     - Save as PNG (for XTC conversion)
     """
     v_overlap = overlap_percent if overlap_percent is not None else MINIMUM_V_OVERLAP_PERCENT
+    if MANHWA and overlap_percent is None:
+        v_overlap = 50
     try:
         from io import BytesIO
         uncropped_img = Image.open(BytesIO(img_data))
@@ -489,6 +491,11 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
         img = uncropped_img
         width, height = img.size
 
+        # Detect solid color pages (blank/filler)
+        # Low standard deviation means the image is mostly one color.
+        img_arr = np.array(img)
+        is_solid = np.std(img_arr) < 5.0
+
         #crop margins in percentage. 
         if MARGIN:
             if MARGIN_VALUE == "0":
@@ -518,7 +525,7 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
         is_landscape = width >= height
 
         # We split most pages that are vertical. 
-        should_this_split = True 
+        should_this_split = True if not is_solid else False
         
         if str(page_num) in SPLIT_SPREADS_PAGES:
             if suffix == "":  
@@ -542,7 +549,8 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                     page_view = uncropped_img;
                     # Portrait overviews are sideways (-90) by default unless SIDEWAYS_OVERVIEWS is set.
                     # Landscape overviews are always sideways to fit the spread on screen.
-                    if is_landscape or not SIDEWAYS_OVERVIEWS:
+                    # Solid pages are always sideways.
+                    if is_landscape or is_solid or not SIDEWAYS_OVERVIEWS:
                         page_view = uncropped_img.rotate(-90, expand=True)
                     output_page = output_path_base.parent / f"{page_num:04d}{suffix}_0_overview.png"
                     save_with_padding(page_view, output_page, padcolor=PADDING_COLOR)
@@ -557,24 +565,26 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
 
         if should_this_split:
             if OVERLAP or DESIRED_V_OVERLAP_SEGMENTS or SET_H_OVERLAP_SEGMENTS or is_landscape:
-                # Use overlapping segments (Force for landscape to ensure 3 pieces)
+                # Use overlapping segments
+                sw = TARGET_HEIGHT
+                sh = TARGET_WIDTH
+                
                 number_of_h_segments = SET_H_OVERLAP_SEGMENTS
-                total_calculated_width = MAX_SPLIT_WIDTH * number_of_h_segments - int((number_of_h_segments - 1) * (MAX_SPLIT_WIDTH * 0.01 * SET_H_OVERLAP_PERCENT))
+                total_calculated_width = sw * number_of_h_segments - int((number_of_h_segments - 1) * (sw * 0.01 * SET_H_OVERLAP_PERCENT))
                 established_scale = total_calculated_width * 1.0 / width
 
-                overlapping_width = MAX_SPLIT_WIDTH / established_scale // 1
+                overlapping_width = sw / established_scale // 1
                 shiftover_to_overlap = 0
                 if number_of_h_segments > 1:
                     shiftover_to_overlap = overlapping_width - (overlapping_width * number_of_h_segments - width) // (number_of_h_segments - 1)
 
-                # For landscape spreads, we want at least 3 segments to ensure good zoom and cover Right-to-Left reading
+                # For landscape spreads, we want at least 3 segments to ensure good zoom
                 number_of_v_segments = (DESIRED_V_OVERLAP_SEGMENTS - 1) if not is_landscape else 2
                 letter_keys = ["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"]
 
-                overlapping_height = 480 / established_scale // 1
+                overlapping_height = sh / established_scale // 1
                 
                 # Ensure we have enough segments to cover the full height without gaps
-                # AND satisfy the minimum overlap requirement
                 shiftdown_to_overlap = 99999
                 while number_of_v_segments < 26:
                     number_of_v_segments += 1
@@ -583,28 +593,27 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                     else:
                         shiftdown_to_overlap = 0
                     
-                    # If shiftdown is less than overlapping_height, it means segments overlap (no gap)
                     if shiftdown_to_overlap <= overlapping_height:
-                        # Check if overlap is sufficient (at least MINIMUM_V_OVERLAP_PERCENT)
                         if (shiftdown_to_overlap * 1.0 / overlapping_height) <= (1.0 - .01 * v_overlap):
                             break
 
                 # Make overlapping segments that fill screen.
-                # Default is Left-to-Right. --landscape-rtl flag gives Right-to-Left.
-                # In rotated image (-90), Right is Top (v=0), Left is Bottom (v=max).
+                # In rotated image (-90), Top (v=0) is Left, Bottom (v=max) is Right.
                 v_list = list(range(number_of_v_segments))
-                if is_landscape and not LANDSCAPE_RTL:
-                    v_list.reverse() # LTR: Bottom-to-Top
+                # Default is LTR (Left then Right). RTL flag reverses this.
+                is_rtl = LANDSCAPE_RTL and not MANHWA
+                if is_rtl:
+                    v_list.reverse() # RTL: Right then Left
 
                 for v_idx, v in enumerate(v_list):
                     h = 0
                     while h < number_of_h_segments:
                         segment = img.crop((shiftover_to_overlap*h, shiftdown_to_overlap*v, width-(shiftover_to_overlap*(number_of_h_segments-h-1)), height-(shiftdown_to_overlap*(number_of_v_segments-v-1))))
-                        # Landscape segments are rotated 90 to be upright portrait (filling screen height)
-                        # Portrait segments are rotated -90 to be sideways.
+                        # Landscape segments are already -90 from base rotation. 
+                        # Rotate 90 to make them upright portrait (0) as requested.
+                        # Portrait segments rotate -90 to be sideways.
                         segment_rotated = segment.rotate(90 if is_landscape else -90, expand=True)
                         
-                        # letter_keys[v_idx] ensures alphabetical order follows reading order
                         if number_of_h_segments > 1:
                             output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v_idx]}_{letter_keys[h]}.png"
                         else:
@@ -613,21 +622,23 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                         h += 1
 
             else:
-                # Top half is Right (if landscape) or Top (if portrait)
+                # Top half is Right (if landscape base -90) or Top (if portrait)
                 part1 = img.crop((0, 0, width, half_height))
-                # Bottom half is Left (if landscape) or Bottom (if portrait)
+                # Bottom half is Left (if landscape base -90) or Bottom (if portrait)
                 part2 = img.crop((0, half_height, width, height))
                 
-                # Landscape segments rotated 90 to be upright portrait; Portrait segments rotated -90 to be sideways
+                # Landscape segments rotate 90 (to become 0 upright); Portrait rotate -90
                 rot = 90 if is_landscape else -90
                 part1_rotated = part1.rotate(rot, expand=True)
                 part2_rotated = part2.rotate(rot, expand=True)
                 
-                if is_landscape and not LANDSCAPE_RTL:
-                    # LTR: Left (part2) then Right (part1)
+                # Default is LTR (Left then Right). RTL flag reverses this for landscape.
+                is_rtl = LANDSCAPE_RTL and not MANHWA
+                if is_landscape and is_rtl:
+                    # RTL: Right (part2) then Left (part1)
                     first, second = part2_rotated, part1_rotated
                 else:
-                    # RTL/Portrait: Right/Top (part1) then Left/Bottom (part2)
+                    # LTR/Portrait: Left/Top (part1) then Right/Bottom (part2)
                     first, second = part1_rotated, part2_rotated
                 
                 out1 = output_path_base.parent / f"{page_num:04d}{suffix}_2_a.png"
@@ -641,7 +652,8 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
             page_view = uncropped_img;
             # Portrait overviews are sideways (-90) by default unless SIDEWAYS_OVERVIEWS is set.
             # Landscape overviews are always sideways to fit the spread on screen.
-            if is_landscape or not SIDEWAYS_OVERVIEWS:
+            # Solid pages are always sideways.
+            if is_landscape or is_solid or not SIDEWAYS_OVERVIEWS:
                 page_view = uncropped_img.rotate(-90, expand=True)
             output_page = output_path_base.parent / f"{page_num:04d}{suffix}_0_overview.png"
             save_with_padding(page_view, output_page, padcolor=PADDING_COLOR)
@@ -788,7 +800,8 @@ def extract_pdf_to_png(pdf_path, temp_dir):
             with open(img_file, "rb") as f:
                 img_data = f.read()
             output_base = output_folder / f"{idx:04d}"
-            optimize_image(img_data, output_base, idx, overlap_percent=20)
+            overlap = 50 if MANHWA else 20
+            optimize_image(img_data, output_base, idx, overlap_percent=overlap)
 
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
             futures = [
@@ -837,7 +850,8 @@ def extract_cbz_to_png(cbz_path, temp_dir):
                 for idx, img_file in enumerate(image_files, 1):
                     img_data = zip_ref.read(img_file)
                     output_base = output_folder / f"{idx:04d}"
-                    futures.append(executor.submit(optimize_image, img_data, output_base, idx))
+                    overlap = 50 if MANHWA else None
+                    futures.append(executor.submit(optimize_image, img_data, output_base, idx, overlap_percent=overlap))
                 
                 for _ in as_completed(futures):
                     pass
@@ -1005,6 +1019,7 @@ def main():
         print("\n  --vsplit-min-overlap <float>   minimum vertical overlap between segments.")
         print("\n  --sample-set <pagenum> ...  Build a spread of contrast samples.")
         print("\n  --landscape-rtl   Process landscape spreads from Right to Left.")
+        print("\n  --manhwa          Use 50% vertical overlap (ideal for webtoons).")
         print("\n  --clean       Automatically delete temporary PNG files after conversion.")
         print("\n  --help, -h    Show this help message")
         return 0
@@ -1039,6 +1054,7 @@ def main():
     global SAMPLE_PAGES
     global PADDING_COLOR
     global LANDSCAPE_RTL
+    global MANHWA
     
     # New globals
     global XTC_MODE
@@ -1050,6 +1066,7 @@ def main():
     clean_temp = "--clean" in sys.argv
     INVERT_COLORS = "--invert" in sys.argv
     LANDSCAPE_RTL = "--landscape-rtl" in sys.argv
+    MANHWA = "--manhwa" in sys.argv
     
     if "--gamma" in sys.argv:
         try:
@@ -1232,7 +1249,7 @@ def main():
     input_files = list(dict.fromkeys(input_files))
     
     if not input_files:
-        print(f"\nNo CBZ or PDF files found in '{input_dir}' or its subdirectories")
+        print(f"\nNo CBZ or PDF files found in '{base_dir}' or its subdirectories")
         return 1
     
     print(f"\nFound {len(input_files)} file(s)")

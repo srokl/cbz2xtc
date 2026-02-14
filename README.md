@@ -2,91 +2,92 @@
 
 Tools for converting CBZ, PDF, and images to XTC/XTCH format for the XTEink X4 e-reader.
 
-## Requirements
+## Installation
 
-- Python 3.7+
-- [Pillow](https://pillow.readthedocs.io/)
-- [NumPy](https://numpy.org/)
-- [Numba](https://numba.pydata.org/) 
-- [PyMuPDF](https://pymupdf.readthedocs.io/) (For PDF extraction in `cbz2xtc.py`)
-- `poppler-utils` (For PDF extraction in `cbz2xtcpoppler.py`)
+### 1. Install Python
+- **Windows**: Download from [python.org](https://www.python.org/). During installation, check "Add Python to PATH".
+- **macOS**: Run `brew install python` or download from [python.org](https://www.python.org/).
+- **Linux**: Usually pre-installed. If not, use `sudo apt install python3`.
+
+### 2. Install Required Libraries
+Open your terminal (Command Prompt on Windows, Terminal on macOS/Linux) and run:
+```bash
+pip install pillow numpy numba pymupdf
+```
+
+### 3. PDF Support (Optional)
+- For `cbz2xtc.py`: `pymupdf` (installed above) is used.
+- For `cbz2xtcpoppler.py`: Install `poppler-utils`.
+  - **macOS**: `brew install poppler`
+  - **Linux**: `sudo apt install poppler-utils`
+  - **Windows**: Download binaries and add to PATH.
+
+## How to Run
+
+1. Place your `.cbz` or `.pdf` files in a folder.
+2. Open your terminal in that folder.
+3. Run the script:
+
+**Windows**:
+```cmd
+python cbz2xtc.py --2bit --clean
+```
+
+**macOS / Linux**:
+```bash
+python3 cbz2xtc.py --2bit --clean
+```
 
 ## Tools
 
-### cbz2xtc.py / cbz2xtcpoppler.py
-Converts CBZ and PDF files to XTC/XTCH.
-- **1-bit (XTC)** and **2-bit (XTCH)** output.
-- **Numpy acceleration**: Encodes images using NumPy to replace Python loops.
-- **Multi-threaded**: Processes multiple pages in parallel.
-- **Page Splitting**: Automatically splits landscape spreads into portrait segments.
-- **Overviews**: Generates full-page overviews (sideways or upright).
-- **Navigation**: Generates Table of Contents (TOC) for jump navigation.
+### cbz2xtc.py
+Processes multiple pages and files in parallel.
+- **Split segments**: Automatically cuts landscape spreads into upright portrait pieces.
+- **Overviews**: Generates full-page views to show the layout before the splits.
+- **Fast Encoding**: Uses NumPy to process images quickly.
 
 ### image2xth.py
-Converts individual images to 2-bit XTCH.
-- Supports `cover`, `letterbox`, `fill`, and `crop` scaling.
-- Customizable dithering and padding.
-
-```bash
-# Basic conversion (Atkinson dither, Cover scaling)
-./image2xth.py wallpaper.jpg
-
-# Scale to fit with black padding
-./image2xth.py wallpaper.jpg --mode letterbox --pad black
-
-# Use Floyd-Steinberg dithering and brighten
-./image2xth.py wallpaper.jpg --dither floyd --gamma 0.7
-```
+Converts a single image (like a wallpaper) to XTCH format.
 
 ### image2bw.py
-Converts individual images to 1-bit BMP.
+Converts a single image to 1-bit BMP format.
 
-```bash
-# Basic conversion (Floyd-Steinberg dither)
-./image2bw.py background.png
+## Options Reference
 
-# Pure threshold (no dithering)
-./image2bw.py background.png --dither none
-```
-
-## Usage
-
-### cbz2xtc.py
-
-```bash
-# Basic conversion (1-bit XTC, Left-to-Right splitting)
-./cbz2xtc.py /path/to/folder
-
-# 2-bit Grayscale (XTCH) with Atkinson dithering
-./cbz2xtc.py --2bit --dither atkinson
-
-# Right-to-Left landscape spread splitting
-./cbz2xtc.py --2bit --landscape-rtl
-
-# Add full-page overviews (upright portrait)
-./cbz2xtc.py --2bit --include-overviews
-
-# Sideways overviews (rotated -90 degrees)
-./cbz2xtc.py --2bit --sideways-overviews
-
-# Clean up temporary files after conversion
-./cbz2xtc.py --clean
-```
-
-### Common Flags
-
-| Flag | Description |
+| Option | Effect |
 | :--- | :--- |
-| `--2bit` | Output 2-bit grayscale (.xtch) instead of 1-bit (.xtc) |
-| `--dither <algo>` | select: `floyd`, `atkinson`, `ordered`, `rasterize`, `none` |
-| `--landscape-rtl` | Process landscape spreads from Right to Left |
-| `--gamma <float>` | Adjust brightness (e.g., `0.7` to brighten) |
-| `--invert` | Invert colors |
-| `--margin <float>` | Crop margins by percentage |
-| `--clean` | Delete intermediate PNG files after processing |
+| `--2bit` | Use 4-level grayscale (higher quality). |
+| `--manhwa` | Use 50% overlap for long-strip webtoons. |
+| `--landscape-rtl` | Process wide pages from Right-to-Left (for Japanese manga). |
+| `--include-overviews` | Add an upright full-page preview before segments. |
+| `--sideways-overviews` | Add a rotated full-page preview (-90 degrees). |
+| `--gamma 0.7` | Brighten the image (use values like 0.5 to 0.9). |
+| `--clean` | Delete temporary files after the conversion is done. |
 
+## Visual Samples
 
-## Credits
+The tool splits images into segments to fill the screen correctly. Here is how a wide spread is handled:
 
-- Original base tool by [tazua/cbz2xtc](https://github.com/tazua/cbz2xtc).
-- Format reference: [bigbag/epub-to-xtc-converter](https://github.com/bigbag/epub-to-xtc-converter).
+| Type | Image | Filename | Description |
+| :--- | :---: | :--- | :--- |
+| **Overview** | ![Overview](samples/landscape_overview.png) | `_overview.png` | Full view of the spread. |
+| **Segment A** | ![Segment A](samples/landscape_seg_a.png) | `_3_a.png` | First part (Left side by default). |
+| **Segment B** | ![Segment B](samples/landscape_seg_b.png) | `_3_b.png` | Middle part (Overlap). |
+| **Segment C** | ![Segment C](samples/landscape_seg_c.png) | `_3_c.png` | Last part (Right side by default). |
+
+*Note: For Japanese manga, use `--landscape-rtl` so that Segment A is the Right side.*
+
+### Dithering and Quality Previews
+
+| Option | Preview | Description |
+| :--- | :---: | :--- |
+| **Atkinson** | ![Atkinson](samples/landscape_seg_a.png) | Default. Sharp and clean shading. |
+| **Floyd-Steinberg** | ![Floyd](samples/dither_floyd.png) | Smoother gradients, traditional look. |
+| **No Dithering** | ![None](samples/dither_none.png) | Pure Black & White. Best for text. |
+| **2-bit Grayscale** | ![2-bit](samples/mode_2bit.png) | 4 levels of gray. Highest quality. |
+
+## Specifications
+
+- **Device:** XTEink X4.
+- **Screen Size:** 480×800 pixels.
+- **Format:** Vertical scan, columns Right-to-Left (XTCH).
