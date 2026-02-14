@@ -370,7 +370,7 @@ def build_xtc_internal(png_paths, out_path, mode="1bit", toc=None):
     return True
 
 
-def optimize_image(img_data, output_path_base, page_num, suffix=""):
+def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_percent=None):
     """
     Optimize image for XTEink X4:
     - crop off image margins (if active)
@@ -381,6 +381,7 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
     - Convert to grayscale/2-bit
     - Save as PNG (for XTC conversion)
     """
+    v_overlap = overlap_percent if overlap_percent is not None else MINIMUM_V_OVERLAP_PERCENT
     try:
         from io import BytesIO
         uncropped_img = Image.open(BytesIO(img_data))
@@ -582,7 +583,7 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                         shiftdown_to_overlap = 0
                     
                     if shiftdown_to_overlap <= overlapping_height:
-                        if (shiftdown_to_overlap * 1.0 / overlapping_height) <= (1.0 - .01 * MINIMUM_V_OVERLAP_PERCENT):
+                        if (shiftdown_to_overlap * 1.0 / overlapping_height) <= (1.0 - .01 * v_overlap):
                             break
 
                 # Make overlapping segments that fill screen.
@@ -762,7 +763,7 @@ def extract_pdf_to_png(pdf_path, temp_dir):
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # 2x scale for better quality before resizing
             img_data = pix.tobytes("png")
             output_base = output_folder / f"{idx:04d}"
-            optimize_image(img_data, output_base, idx)
+            optimize_image(img_data, output_base, idx, overlap_percent=20)
 
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
             futures = [
