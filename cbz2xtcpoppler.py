@@ -21,6 +21,7 @@ import subprocess
 import struct
 import hashlib
 import re
+import json
 import numpy as np
 try:
     from numba import njit
@@ -602,8 +603,8 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                 v_list = list(range(number_of_v_segments))
                 # Default is LTR (Left then Right). RTL flag reverses this.
                 is_rtl = LANDSCAPE_RTL and not MANHWA
-                if is_rtl:
-                    v_list.reverse() # RTL: Right then Left
+                if not is_rtl:
+                    v_list.reverse() # LTR: Bottom-to-Top (Left then Right)
 
                 for v_idx, v in enumerate(v_list):
                     h = 0
@@ -614,10 +615,15 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                         # Portrait segments rotate -90 to be sideways.
                         segment_rotated = segment.rotate(90 if is_landscape else -90, expand=True)
                         
+                        # Determine letter key (Reverse order for RTL if requested: c, b, a)
+                        key_idx = v_idx
+                        if is_landscape and is_rtl:
+                            key_idx = number_of_v_segments - 1 - v_idx
+                        
                         if number_of_h_segments > 1:
-                            output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v_idx]}_{letter_keys[h]}.png"
+                            output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[key_idx]}_{letter_keys[h]}.png"
                         else:
-                            output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v_idx]}.png"
+                            output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[key_idx]}.png"
                         size = save_with_padding(segment_rotated, output, padcolor=PADDING_COLOR)
                         h += 1
 
@@ -756,6 +762,140 @@ def save_with_padding(img, output_path, *, padcolor=255):
     return output_path.stat().st_size
 
 
+def preprocess_for_manhwa(img_data, page_num):
+    """
+    Preprocess image for Manhwa stitching:
+    - Load
+    - Contrast Boost
+    - Grayscale
+    - Margin Crop (if enabled)
+    - Rotate if Landscape
+    - Resize to width 480
+    Returns PIL Image or None
+    """
+    try:
+        from io import BytesIO
+        uncropped_img = Image.open(BytesIO(img_data))
+        
+        # Checks
+        if SKIP_ON and str(page_num) in SKIP_PAGES: return None
+        if START_PAGE and page_num < START_PAGE: return None
+        if STOP_PAGE and page_num > STOP_PAGE: return None
+        if ONLY_ON and str(page_num) not in ONLY_PAGES: return None
+        
+        # Contrast
+        if CONTRAST_BOOST:
+            if CONTRAST_VALUE == "0": pass
+            elif len(CONTRAST_VALUE.split(',')) > 1:
+                black_cutoff = 3 * int(CONTRAST_VALUE.split(',')[0])
+                white_cutoff = 3 + 9 * int(CONTRAST_VALUE.split(',')[1])
+                uncropped_img = ImageOps.autocontrast(uncropped_img, cutoff=(black_cutoff,white_cutoff), preserve_tone=True)
+            elif 0 <= int(CONTRAST_VALUE) <= 8:
+                black_cutoff = 3 * int(CONTRAST_VALUE)
+                white_cutoff = 3 + 9 * int(CONTRAST_VALUE)
+                uncropped_img = ImageOps.autocontrast(uncropped_img, cutoff=(black_cutoff,white_cutoff), preserve_tone=True)
+
+        # Grayscale
+        if uncropped_img.mode != 'L':
+            uncropped_img = uncropped_img.convert('L')
+        
+        img = uncropped_img
+        width, height = img.size
+        
+        # Margin Crop
+        if MARGIN:
+            if MARGIN_VALUE == "0": pass
+            elif MARGIN_VALUE.lower() == "auto":
+                invert_img=ImageOps.invert(uncropped_img)
+                invert_img=ImageOps.autocontrast(invert_img,cutoff=(59,40))
+                image_box_coords = invert_img.getbbox()
+                img = uncropped_img.crop(image_box_coords)
+            elif len(MARGIN_VALUE.split(',')) > 1:
+                m = MARGIN_VALUE.split(',') + ["0","0"]
+                l, t, r, b = float(m[0]), float(m[1]), float(m[2]), float(m[3])
+                img = uncropped_img.crop((int(l/100.0*width), int(t/100.0*height), width-int(r/100.0*width), height-int(b/100.0*height)))
+            else:
+                crop = float(MARGIN_VALUE)
+                img = uncropped_img.crop((int(crop/100.0*width), int(crop/100.0*height), width-int(crop/100.0*width), height-int(crop/100.0*height)))
+        
+        # Resize to Target Width (480)
+        w, h = img.size
+        scale = TARGET_WIDTH / w
+        new_h = int(h * scale)
+        img = img.resize((TARGET_WIDTH, new_h), Image.Resampling.BILINEAR)
+        
+        return img
+    except Exception as e:
+        print(f"Error preprocessing page {page_num}: {e}")
+        return None
+
+
+def process_manhwa_stream(image_iterator, output_folder):
+    """
+    Process a stream of images as a continuous vertical strip.
+    Stitches them together and slices into 480x800 pages.
+    Detects solid color pages and accelerates scrolling through them.
+    """
+    print("  Processing in Manhwa Mode (Continuous Strip)...", end=" ", flush=True)
+    
+    current_buffer = None # PIL Image
+    output_count = 1
+    
+    slice_height = TARGET_HEIGHT
+    overlap_percent = 75
+    overlap_pixels = int(slice_height * (overlap_percent / 100.0))
+    # Standard step (slow scroll for content)
+    standard_step = slice_height - overlap_pixels
+    
+    page_mapping = {}
+    
+    for img_data, page_num in image_iterator:
+        # Record where this source page starts (approximate to current screen)
+        page_mapping[page_num] = output_count
+        
+        img = preprocess_for_manhwa(img_data, page_num)
+        if img is None: continue
+        
+        if current_buffer is None:
+            current_buffer = img
+        else:
+            # Stitch
+            new_h = current_buffer.height + img.height
+            new_img = Image.new('L', (TARGET_WIDTH, new_h))
+            new_img.paste(current_buffer, (0, 0))
+            new_img.paste(img, (0, current_buffer.height))
+            current_buffer = new_img
+        
+        # Slice chunks
+        while current_buffer.height >= slice_height:
+            chunk = current_buffer.crop((0, 0, TARGET_WIDTH, slice_height))
+            
+            # Check for solid color in this specific view
+            chunk_arr = np.array(chunk)
+            is_solid = np.std(chunk_arr) < 5.0
+            
+            step = slice_height if is_solid else standard_step
+            
+            # Save
+            out_path = output_folder / f"{output_count:05d}.png" 
+            save_with_padding(chunk, out_path, padcolor=PADDING_COLOR)
+            output_count += 1
+            
+            # Remove chunk from buffer
+            current_buffer = current_buffer.crop((0, step, TARGET_WIDTH, current_buffer.height))
+    
+    # Handle remainder
+    if current_buffer and current_buffer.height > 0:
+        out_path = output_folder / f"{output_count:05d}.png"
+        save_with_padding(current_buffer, out_path, padcolor=PADDING_COLOR)
+        
+    # Save mapping
+    with open(output_folder / "manhwa_map.json", "w") as f:
+        json.dump(page_mapping, f)
+        
+    print("✓")
+
+
 def extract_pdf_to_png(pdf_path, temp_dir):
     """
     Extract PDF to PNGs using pdftoppm (poppler-utils)
@@ -795,6 +935,16 @@ def extract_pdf_to_png(pdf_path, temp_dir):
         # Sort naturally (page-1, page-2, ... page-10)
         generated_files.sort(key=lambda f: int(f.stem.split('-')[-1]))
         
+        if MANHWA:
+            def pdf_iterator():
+                for idx, img_file in enumerate(generated_files, 1):
+                    with open(img_file, "rb") as f:
+                        yield f.read(), idx
+            
+            process_manhwa_stream(pdf_iterator(), output_folder)
+            shutil.rmtree(raw_dir) # Clean up raw
+            return output_folder
+
         # Process extracted images in parallel
         def process_raw_page(idx, img_file, output_folder):
             with open(img_file, "rb") as f:
@@ -845,6 +995,14 @@ def extract_cbz_to_png(cbz_path, temp_dir):
             
             print(f"  Extracting and converting {len(image_files)} pages...", end=" ", flush=True)
             
+            if MANHWA:
+                def cbz_iterator():
+                    for idx, img_file in enumerate(image_files, 1):
+                        yield zip_ref.read(img_file), idx
+                
+                process_manhwa_stream(cbz_iterator(), output_folder)
+                return output_folder
+
             with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
                 futures = []
                 for idx, img_file in enumerate(image_files, 1):
@@ -877,19 +1035,54 @@ def convert_png_folder_to_xtc(png_folder, output_file, source_file=None):
 
     # Build mapping from original page number to first and last segment index
     page_ranges = {}
-    for idx, p in enumerate(png_files, 1):
+    manhwa_map_file = png_folder / "manhwa_map.json"
+    
+    if manhwa_map_file.exists():
         try:
-            # Filename format: {page_num:04d}{suffix}_{type}_...
-            m = re.match(r'^(\d+)', p.name)
-            if not m: continue
-            orig_page = int(m.group(1))
+            with open(manhwa_map_file) as f:
+                mapping = json.load(f)
+            # Reconstruct page_ranges from mapping
+            sorted_pages = sorted([int(k) for k in mapping.keys()])
+            total_files = len(png_files)
             
-            if orig_page not in page_ranges:
-                page_ranges[orig_page] = {'start': idx, 'end': idx}
-            else:
-                page_ranges[orig_page]['end'] = idx
-        except (ValueError, IndexError):
-            continue
+            for i, p in enumerate(sorted_pages):
+                start = mapping[str(p)]
+                # Ensure start is within bounds
+                if start > total_files: start = total_files
+                
+                # End is start of next - 1, or last file
+                if i < len(sorted_pages) - 1:
+                    next_p = sorted_pages[i+1]
+                    end = mapping[str(next_p)]
+                    if end > total_files: end = total_files
+                    
+                    # Convert 'start of next' to 'inclusive end of current'
+                    if end > start: end -= 1
+                    
+                    # If next page starts on same screen (rare but possible), ensure end >= start
+                    if end < start: end = start
+                else:
+                    end = total_files
+                
+                page_ranges[p] = {'start': start, 'end': end}
+        except Exception as e:
+            print(f"Warning: Failed to load manhwa map: {e}")
+            pass
+
+    if not page_ranges:
+        for idx, p in enumerate(png_files, 1):
+            try:
+                # Filename format: {page_num:04d}{suffix}_{type}_...
+                m = re.match(r'^(\d+)', p.name)
+                if not m: continue
+                orig_page = int(m.group(1))
+                
+                if orig_page not in page_ranges:
+                    page_ranges[orig_page] = {'start': idx, 'end': idx}
+                else:
+                    page_ranges[orig_page]['end'] = idx
+            except (ValueError, IndexError):
+                continue
 
     # Generate TOC
     toc = []
