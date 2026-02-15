@@ -24,6 +24,7 @@ except ImportError:
     def njit(func):
         return func
 from pathlib import Path
+from io import BytesIO
 from PIL import Image, ImageOps, ImageDraw, ImageFont
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
@@ -45,6 +46,7 @@ VIEWPORT = "desktop"     # desktop or mobile
 COOKIES_FILE = None      # Path to Netscape formatted cookies file
 DYNAMIC_MODE = False     # Dynamic crawling mode
 PARALLEL_LINKS = False   # Parallelize link crawling
+WEBSITE_MODE = None      # Specific website handling (e.g. 'wikipedia')
 
 # Common User Agent for Desktop Spoofing
 UA_DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
@@ -893,30 +895,46 @@ def process_manhwa_stream(image_iterator, output_folder):
     print("✓")
 
 
-def remove_popups(page):
-    """Attempt to remove sticky headers, footers, modals, and cookie banners."""
+def clean_page(page):
+    """Perform safe cleanups before capture (e.g. redirect notices)."""
     try:
         page.evaluate("""() => {
-            const selectors = [
-                '#cookie-banner', '.cookie-banner', '#accept-cookies', '.accept-cookies',
-                'div[class*="popup"]', 'div[class*="modal"]', 'div[class*="overlay"]',
-                'div[id*="popup"]', 'div[id*="modal"]', 'div[id*="overlay"]',
-                'header', 'footer', 'nav', '.sticky', '.fixed',
-                '[style*="position: fixed"]', '[style*="position: sticky"]'
-            ];
-            selectors.forEach(sel => {
-                document.querySelectorAll(sel).forEach(el => {
-                    // Be careful not to remove content that just happens to be fixed/sticky relative
-                    // Heuristic: if it covers a significant portion of screen or is at edges
-                    // For now, just hide them to clean up the capture
+            // Remove Wikipedia redirect notice
+            const redirectMsg = document.querySelector('.mw-redirectedfrom');
+            if (redirectMsg) redirectMsg.style.display = 'none';
+            
+            // Fallback: Remove small elements containing "redirected from"
+            const candidates = document.querySelectorAll('div, span, p, small');
+            candidates.forEach(el => {
+                if (el.innerText && el.innerText.includes('(redirected from') && el.innerText.length < 200) {
                     el.style.display = 'none';
-                    el.style.visibility = 'hidden';
-                });
+                }
             });
-            // Force overflow visible on body to ensure full scroll
-            document.body.style.overflow = 'visible';
-            document.documentElement.style.overflow = 'visible';
         }""")
+    except: pass
+
+
+def scroll_page(page):
+    """Scroll to bottom to trigger lazy loading."""
+    try:
+        # Scroll down slowly to trigger lazy loads
+        page.evaluate("""async () => {
+            await new Promise((resolve) => {
+                let totalHeight = 0;
+                const distance = 300;
+                const timer = setInterval(() => {
+                    const scrollHeight = document.body.scrollHeight;
+                    window.scrollBy(0, distance);
+                    totalHeight += distance;
+
+                    if(totalHeight >= scrollHeight){
+                        clearInterval(timer);
+                        resolve();
+                    }
+                }, 100);
+            });
+        }""")
+        time.sleep(3.0) # Wait longer for images to render
     except: pass
 
 
@@ -928,6 +946,11 @@ def capture_page_worker(args):
         with sync_playwright() as p:
             if viewport == "mobile":
                 device = p.devices['iPhone 13 Pro']
+                # Override viewport to match XTEink X4 (480x800) for 1:1 pixel mapping
+                device['viewport'] = {'width': 480, 'height': 800}
+                # Disable Retina scaling (DPR=1) for 9x speedup and native 480px width
+                device['device_scale_factor'] = 1
+                # Keep the Mobile User Agent from the device descriptor
                 browser = p.chromium.launch()
                 context = browser.new_context(**device)
             else:
@@ -940,7 +963,11 @@ def capture_page_worker(args):
                 
             page = context.new_page()
             page.goto(url, wait_until="networkidle", timeout=60000)
-            remove_popups(page)
+            
+            # Pre-processing
+            scroll_page(page)
+            clean_page(page)
+            
             data = page.screenshot(full_page=True, type='png')
             browser.close()
             return (data, idx, title)
@@ -969,6 +996,8 @@ def extract_url_to_png(url, temp_dir):
         with sync_playwright() as p:
             if VIEWPORT == "mobile":
                 device = p.devices['iPhone 13 Pro']
+                device['viewport'] = {'width': 480, 'height': 800}
+                device['device_scale_factor'] = 1
                 browser = p.chromium.launch()
                 context = browser.new_context(**device)
             else:
@@ -982,6 +1011,20 @@ def extract_url_to_png(url, temp_dir):
             page = context.new_page()
             page.goto(url, wait_until="networkidle", timeout=60000)
             time.sleep(2) 
+
+            if WEBSITE_MODE == 'wikipedia':
+                print("\n  [Wikipedia] Expanding sections...", end=" ", flush=True)
+                try:
+                    page.evaluate("""() => {
+                        const wikis = document.querySelectorAll('.collapsible-heading, [aria-expanded="false"]');
+                        wikis.forEach(el => {
+                            if (el.getAttribute('aria-expanded') === 'false' || el.classList.contains('closed-block')) {
+                                el.click();
+                            }
+                        });
+                    }""")
+                    time.sleep(1)
+                except: pass
 
             if DYNAMIC_MODE:
                 print("\n  [Dynamic] Identifying interactive elements...", end=" ", flush=True)
@@ -1019,7 +1062,8 @@ def extract_url_to_png(url, temp_dir):
                 print(f" Found {len(unique_links)} links.")
                 
                 # Capture Main Page
-                remove_popups(page)
+                scroll_page(page)
+                clean_page(page)
                 captures.append((page.screenshot(full_page=True, type='png'), 1, "Main Page"))
                 
                 link_items = []
@@ -1052,6 +1096,8 @@ def extract_url_to_png(url, temp_dir):
                     with sync_playwright() as p:
                         if VIEWPORT == "mobile":
                             device = p.devices['iPhone 13 Pro']
+                            device['viewport'] = {'width': 480, 'height': 800}
+                            device['device_scale_factor'] = 1
                             browser = p.chromium.launch()
                             context = browser.new_context(**device)
                         else:
@@ -1067,7 +1113,8 @@ def extract_url_to_png(url, temp_dir):
                             print(f"\r    [{idx}/{total}] {link_text}...", end="", flush=True)
                             try:
                                 page.goto(link_url, wait_until="networkidle", timeout=30000)
-                                remove_popups(page)
+                                scroll_page(page)
+                                clean_page(page)
                                 captures.append((page.screenshot(full_page=True, type='png'), i, link_text))
                             except: pass
                         browser.close()
@@ -1075,7 +1122,8 @@ def extract_url_to_png(url, temp_dir):
 
             else:
                 # Standard Mode
-                remove_popups(page)
+                scroll_page(page)
+                clean_page(page)
                 captures.append((page.screenshot(full_page=True, type='png'), 1, "Main Page"))
                 browser.close()
 
@@ -1304,7 +1352,7 @@ def main():
     global START_PAGE, STOP_PAGE, SAMPLE_SET, SAMPLE_PAGES
     global DESIRED_V_OVERLAP_SEGMENTS, SET_H_OVERLAP_SEGMENTS, MINIMUM_V_OVERLAP_PERCENT, SET_H_OVERLAP_PERCENT
     global MAX_SPLIT_WIDTH, PADDING_COLOR, LANDSCAPE_RTL, MANHWA
-    global XTC_MODE, DITHER_ALGO, GAMMA_VALUE, INVERT_COLORS, VIEWPORT, COOKIES_FILE, DYNAMIC_MODE, PARALLEL_LINKS
+    global XTC_MODE, DITHER_ALGO, GAMMA_VALUE, INVERT_COLORS, VIEWPORT, COOKIES_FILE, DYNAMIC_MODE, PARALLEL_LINKS, WEBSITE_MODE
 
     clean_temp = "--clean" in sys.argv
     INVERT_COLORS = "--invert" in sys.argv
@@ -1312,6 +1360,12 @@ def main():
     MANHWA = "--manhwa" in sys.argv
     DYNAMIC_MODE = "--dynamic" in sys.argv
     PARALLEL_LINKS = "--parallel-links" in sys.argv
+    
+    if "--website" in sys.argv:
+        try:
+            idx = sys.argv.index("--website")
+            WEBSITE_MODE = sys.argv[idx+1].lower()
+        except: pass
     
     if "--gamma" in sys.argv:
         try:
@@ -1371,6 +1425,7 @@ def main():
         elif arg == "--vsplit-target": 
             OVERLAP = True; DESIRED_V_OVERLAP_SEGMENTS = int(sys.argv[i+1])
         elif arg == "--cookies": pass
+        elif arg == "--website": pass
         i += 1
 
     input_arg = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else ""
