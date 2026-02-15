@@ -12,10 +12,16 @@ Tools for converting CBZ, PDF, and images to XTC/XTCH format for the XTEink X4 e
 ### 2. Install Required Libraries
 Open your terminal (Command Prompt on Windows, Terminal on macOS/Linux) and run:
 ```bash
-pip install pillow numpy numba pymupdf
+pip install pillow numpy numba pymupdf playwright
 ```
 
-### 3. PDF Support (Optional)
+### 3. Web Support (For web2xtc)
+After installing playwright (above), you must install the browsers:
+```bash
+playwright install
+```
+
+### 4. PDF Support (Optional)
 - For `cbz2xtc.py`: `pymupdf` (installed above) is used.
 - For `cbz2xtcpoppler.py`: Install `poppler-utils`.
   - **macOS**: `brew install poppler`
@@ -38,6 +44,11 @@ python cbz2xtc.py --2bit --clean
 python3 cbz2xtc.py --2bit --clean
 ```
 
+### Running web2xtc (Website Converter)
+```bash
+./web2xtc "https://example.com/manga" --manhwa --dynamic
+```
+
 ## Tools
 
 ### cbz2xtc.py
@@ -45,6 +56,12 @@ Processes multiple pages and files in parallel.
 - **Split segments**: Automatically cuts landscape spreads into upright portrait pieces.
 - **Overviews**: Generates full-page views to show the layout before the splits.
 - **Fast Encoding**: Uses NumPy to process images quickly.
+
+### web2xtc
+Converts websites directly to XTC/XTCH format.
+- **Full Page Capture**: Screenshots the entire scrolling page.
+- **Dynamic Mode**: Expands dropdowns and crawls links (chapters/sub-pages).
+- **Mobile/Desktop**: Simulates iPhone 13 Pro or Desktop viewport.
 
 ### image2xth.py
 Converts a single image (like a wallpaper) to XTCH format.
@@ -54,15 +71,24 @@ Converts a single image to 1-bit BMP format.
 
 ## Options Reference
 
+### General Options (cbz2xtc & web2xtc)
 | Option | Effect |
 | :--- | :--- |
 | `--2bit` | Use 4-level grayscale (higher quality). |
-| `--manhwa` | Use 50% overlap for long-strip webtoons. |
+| `--manhwa` | Use 75% overlap for long-strip webtoons. |
 | `--landscape-rtl` | Process wide pages from Right-to-Left (for Japanese manga). |
 | `--include-overviews` | Add an upright full-page preview before segments. |
 | `--sideways-overviews` | Add a rotated full-page preview (-90 degrees). |
 | `--gamma 0.7` | Brighten the image (use values like 0.5 to 0.9). |
 | `--clean` | Delete temporary files after the conversion is done. |
+
+### Web Options (web2xtc only)
+| Option | Effect |
+| :--- | :--- |
+| `--dynamic` | Expands menus and crawls 1st-page links (chapters). |
+| `--parallel-links` | Crawls sub-links in parallel (faster). |
+| `--viewport mobile` | Use mobile layout (iPhone 13 Pro). Default is desktop. |
+| `--cookies file.txt` | Load cookies from a Netscape-formatted file. |
 
 ## Visual Samples
 
