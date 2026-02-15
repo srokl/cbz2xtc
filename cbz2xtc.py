@@ -641,8 +641,9 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                 if is_landscape:
                     # Default is LTR (Left then Right). RTL flag reverses this.
                     is_rtl = LANDSCAPE_RTL and not MANHWA
-                    if not is_rtl:
-                        v_list.reverse() # LTR: Bottom-to-Top (Left then Right)
+                    if is_rtl:
+                        v_list.reverse() # RTL: Left then Right (Swapped)
+
                 # Portrait splits are always Top-to-Bottom (v=0 to max).
 
                 for v_idx, v in enumerate(v_list):
@@ -654,15 +655,10 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                         rot = 90 if is_landscape else (0 if MANHWA else -90)
                         segment_rotated = segment.rotate(rot, expand=True)
                         
-                        # Determine letter key (Reverse order for RTL if requested: c, b, a)
-                        key_idx = v_idx
-                        if is_landscape and is_rtl:
-                            key_idx = number_of_v_segments - 1 - v_idx
-                        
                         if number_of_h_segments > 1:
-                            output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[key_idx]}_{letter_keys[h]}.png"
+                            output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v_idx]}_{letter_keys[h]}.png"
                         else:
-                            output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[key_idx]}.png"
+                            output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v_idx]}.png"
                         size = save_with_padding(segment_rotated, output, padcolor=PADDING_COLOR)
                         h += 1
 
@@ -682,11 +678,11 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                 is_rtl = LANDSCAPE_RTL and not MANHWA
                 if is_landscape:
                     if is_rtl:
-                        # RTL: Right (part1) then Left (part2)
-                        first, second = part1_rotated, part2_rotated
-                    else:
-                        # LTR: Left (part2) then Right (part1)
+                        # RTL: Left (part2) then Right (part1)
                         first, second = part2_rotated, part1_rotated
+                    else:
+                        # LTR: Right (part1) then Left (part2)
+                        first, second = part1_rotated, part2_rotated
                 else:
                     # Portrait: always Top (part1) then Bottom (part2)
                     first, second = part1_rotated, part2_rotated

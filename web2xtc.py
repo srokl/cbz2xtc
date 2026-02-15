@@ -1,23 +1,17 @@
 #!/usr/bin/env python3
 """
-cbz2xtc - Convert CBZ manga and PDF files to XTC/XTCH format for XTEink X4
-All-in-one tool: Extraction → Optimization → XTC/XTCH Encoding
+web2xtc - Convert Websites to XTC/XTCH format for XTEink X4
+Uses Playwright to capture full-page screenshots and converts them.
 
 Usage:
-    cbz2xtc                    # Process current directory
-    cbz2xtc /path/to/folder    # Process specific folder
-    cbz2xtc --clean            # Process and clean up intermediate files
-    cbz2xtc --dither <algo>    # Specify dithering (floyd, atkinson, ordered, none)
-    cbz2xtc --2bit             # Use 2-bit (4-level) grayscale mode (outputs .xtch)
-    cbz2xtc --gamma 0.7        # Adjust brightness
-    cbz2xtc --invert           # Invert colors
+    web2xtc <url>              # Process URL
+    web2xtc <url> --manhwa     # Process as Manhwa (stitched)
+    web2xtc <url> --viewport mobile  # Use mobile viewport
 """
 
 import os
 import sys
-import zipfile
 import shutil
-import subprocess
 import struct
 import hashlib
 import re
@@ -34,6 +28,9 @@ from PIL import Image, ImageOps, ImageDraw, ImageFont
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
+# Disable Decompression Bomb Error for large webtoons
+Image.MAX_IMAGE_PIXELS = None
+
 
 # Configuration
 TARGET_WIDTH = 480
@@ -44,6 +41,13 @@ XTC_MODE = "1bit"        # "1bit" or "2bit"
 DITHER_ALGO = "atkinson"    # "floyd", "ordered", "rasterize", "none", "atkinson"
 GAMMA_VALUE = 1.0        # Gamma correction value (1.0 = neutral)
 INVERT_COLORS = False    # Invert colors (White <-> Black)
+VIEWPORT = "desktop"     # desktop or mobile
+COOKIES_FILE = None      # Path to Netscape formatted cookies file
+DYNAMIC_MODE = False     # Dynamic crawling mode
+PARALLEL_LINKS = False   # Parallelize link crawling
+
+# Common User Agent for Desktop Spoofing
+UA_DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
 # Dithering options mapping
 DITHER_MAP = {
@@ -53,6 +57,33 @@ DITHER_MAP = {
     'none': Image.Dither.NONE,
     'atkinson': 'atkinson' # Custom implementation
 }
+
+
+def parse_netscape_cookies(cookie_file):
+    """Parse Netscape/Mozilla cookie file format into Playwright list of dicts."""
+    cookies = []
+    try:
+        with open(cookie_file, 'r') as f:
+            for line in f:
+                if line.startswith('#') or not line.strip(): continue
+                parts = line.strip().split('\t')
+                if len(parts) >= 7:
+                    domain = parts[0]
+                    # Netscape format: domain, flag, path, secure, expiration, name, value
+                    cookie = {
+                        'domain': domain,
+                        'path': parts[2],
+                        'secure': parts[3].upper() == 'TRUE',
+                        'expires': int(parts[4]) if parts[4] != "0" else -1,
+                        'name': parts[5],
+                        'value': parts[6]
+                    }
+                    # Playwright requires url or domain. Domain starting with dot requires handled carefully
+                    # usually just passing domain works if formatted right.
+                    cookies.append(cookie)
+    except Exception as e:
+        print(f"Warning: Failed to parse cookie file: {e}")
+    return cookies
 
 
 @njit
@@ -210,47 +241,6 @@ def png_to_xth_bytes(img: Image.Image, force_size=(480, 800)):
         md5digest,
     )
     return header + data
-
-
-def get_cbz_bookmarks(cbz_path):
-    """
-    Extract bookmarks from ComicInfo.xml or folder structure in CBZ.
-    Returns: Dict mapping 1-indexed page number to bookmark title.
-    """
-    import xml.etree.ElementTree as ET
-    bookmarks = {}
-    try:
-        with zipfile.ZipFile(cbz_path, 'r') as zip_ref:
-            file_list = zip_ref.namelist()
-            image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp')
-            os_metadata_exclusions = ('__macos')
-            
-            # Filter and sort image files to establish page order
-            image_files = sorted([f for f in file_list if f.lower().endswith(image_extensions) and not f.lower().startswith(os_metadata_exclusions)])
-            
-            # 1. Try folder-based naming first (User request: "get the chapter name from folder name if available")
-            for idx, img_path in enumerate(image_files, 1):
-                # Extract folder name
-                parts = Path(img_path).parts
-                if len(parts) > 1:
-                    folder_name = parts[-2]
-                    bookmarks[idx] = folder_name
-
-            # 2. Try ComicInfo.xml bookmarks (overwrites folder names if exact matches found)
-            if 'ComicInfo.xml' in file_list:
-                xml_data = zip_ref.read('ComicInfo.xml')
-                root = ET.fromstring(xml_data)
-                pages_node = root.find('Pages')
-                if pages_node is not None:
-                    for idx, page in enumerate(pages_node.findall('Page')):
-                        bookmark = page.get('Bookmark')
-                        if bookmark:
-                            bookmarks[idx + 1] = bookmark
-                            
-    except Exception as e:
-        print(f"  Warning: Could not extract bookmarks from CBZ: {e}")
-        
-    return bookmarks
 
 
 def build_xtc_internal(png_paths, out_path, mode="1bit", toc=None):
@@ -610,10 +600,10 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                     h = 0
                     while h < number_of_h_segments:
                         segment = img.crop((shiftover_to_overlap*h, shiftdown_to_overlap*v, width-(shiftover_to_overlap*(number_of_h_segments-h-1)), height-(shiftdown_to_overlap*(number_of_v_segments-v-1))))
-                        # Landscape segments are already -90 from base rotation. 
-                        # Rotate 90 to make them upright portrait (0) as requested.
-                        # Portrait segments rotate -90 to be sideways.
-                        segment_rotated = segment.rotate(90 if is_landscape else -90, expand=True)
+                        # Landscape segments rotate 90 to make them upright portrait (0).
+                        # Portrait segments: upright (0) if MANHWA, else sideways (-90).
+                        rot = 90 if is_landscape else (0 if MANHWA else -90)
+                        segment_rotated = segment.rotate(rot, expand=True)
                         
                         if number_of_h_segments > 1:
                             output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v_idx]}_{letter_keys[h]}.png"
@@ -628,8 +618,9 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                 # Bottom half is Left (if landscape base -90) or Bottom (if portrait)
                 part2 = img.crop((0, half_height, width, height))
                 
-                # Landscape segments rotate 90 (to become 0 upright); Portrait rotate -90
-                rot = 90 if is_landscape else -90
+                # Landscape segments rotate 90 (to become 0 upright).
+                # Portrait segments: upright (0) if MANHWA, else sideways (-90).
+                rot = 90 if is_landscape else (0 if MANHWA else -90)
                 part1_rotated = part1.rotate(rot, expand=True)
                 part2_rotated = part2.rotate(rot, expand=True)
                 
@@ -848,9 +839,16 @@ def process_manhwa_stream(image_iterator, output_folder):
     
     page_mapping = {}
     
-    for img_data, page_num in image_iterator:
-        # Record where this source page starts (approximate to current screen)
-        page_mapping[page_num] = output_count
+    for item in image_iterator:
+        # Unpack item (handle legacy 2-tuple or new 3-tuple)
+        if len(item) == 3:
+            img_data, page_num, page_title = item
+        else:
+            img_data, page_num = item
+            page_title = f"Page {page_num}"
+
+        # Record where this source page starts
+        page_mapping[str(page_num)] = {'start': output_count, 'title': page_title}
         
         img = preprocess_for_manhwa(img_data, page_num)
         if img is None: continue
@@ -887,7 +885,7 @@ def process_manhwa_stream(image_iterator, output_folder):
     if current_buffer and current_buffer.height > 0:
         out_path = output_folder / f"{output_count:05d}.png"
         save_with_padding(current_buffer, out_path, padcolor=PADDING_COLOR)
-        
+    
     # Save mapping
     with open(output_folder / "manhwa_map.json", "w") as f:
         json.dump(page_mapping, f)
@@ -895,127 +893,205 @@ def process_manhwa_stream(image_iterator, output_folder):
     print("✓")
 
 
-def extract_pdf_to_png(pdf_path, temp_dir):
-    """
-    Extract PDF to PNGs using pdftoppm (poppler-utils)
-    """
-    if not shutil.which("pdftoppm"):
-        print("  ✗ Error: pdftoppm not found. Please install poppler-utils.")
-        return None
-
-    pdf_name = pdf_path.stem
-    output_folder = temp_dir / pdf_name
-    output_folder.mkdir(parents=True, exist_ok=True)
-    
-    print(f"  Extracting and converting PDF pages...", end=" ", flush=True)
-    
-    # Create a raw directory for initial extraction
-    raw_dir = output_folder / "_raw_extract"
-    raw_dir.mkdir(exist_ok=True)
-    prefix = raw_dir / "page"
-    
+def remove_popups(page):
+    """Attempt to remove sticky headers, footers, modals, and cookie banners."""
     try:
-        # pdftoppm -png input.pdf output_prefix
-        # Note: -j (parallel) is not supported in all poppler versions (e.g. Termux)
-        cmd = ["pdftoppm", "-png", str(pdf_path), str(prefix)]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            print(f"✗ Error extracting PDF: {result.stderr or result.stdout}")
-            return None
-            
-        # Get generated files
-        generated_files = list(raw_dir.glob("page-*.png"))
-        
-        if not generated_files:
-            print(f"✗ No images extracted from {pdf_name}")
-            return None
-            
-        # Sort naturally (page-1, page-2, ... page-10)
-        generated_files.sort(key=lambda f: int(f.stem.split('-')[-1]))
-        
-        if MANHWA:
-            def pdf_iterator():
-                for idx, img_file in enumerate(generated_files, 1):
-                    with open(img_file, "rb") as f:
-                        yield f.read(), idx
-            
-            process_manhwa_stream(pdf_iterator(), output_folder)
-            shutil.rmtree(raw_dir) # Clean up raw
-            return output_folder
+        page.evaluate("""() => {
+            const selectors = [
+                '#cookie-banner', '.cookie-banner', '#accept-cookies', '.accept-cookies',
+                'div[class*="popup"]', 'div[class*="modal"]', 'div[class*="overlay"]',
+                'div[id*="popup"]', 'div[id*="modal"]', 'div[id*="overlay"]',
+                'header', 'footer', 'nav', '.sticky', '.fixed',
+                '[style*="position: fixed"]', '[style*="position: sticky"]'
+            ];
+            selectors.forEach(sel => {
+                document.querySelectorAll(sel).forEach(el => {
+                    // Be careful not to remove content that just happens to be fixed/sticky relative
+                    // Heuristic: if it covers a significant portion of screen or is at edges
+                    // For now, just hide them to clean up the capture
+                    el.style.display = 'none';
+                    el.style.visibility = 'hidden';
+                });
+            });
+            // Force overflow visible on body to ensure full scroll
+            document.body.style.overflow = 'visible';
+            document.documentElement.style.overflow = 'visible';
+        }""")
+    except: pass
 
-        # Process extracted images in parallel
-        def process_raw_page(idx, img_file, output_folder):
-            with open(img_file, "rb") as f:
-                img_data = f.read()
-            output_base = output_folder / f"{idx:04d}"
-            overlap = 50 if MANHWA else 20
-            optimize_image(img_data, output_base, idx, overlap_percent=overlap)
 
-        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
-            futures = [
-                executor.submit(process_raw_page, idx, img_file, output_folder)
-                for idx, img_file in enumerate(generated_files, 1)
-            ]
-            for _ in as_completed(futures):
-                pass
+def capture_page_worker(args):
+    """Worker for parallel link capturing"""
+    url, idx, title, viewport, cookies_file = args
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            if viewport == "mobile":
+                device = p.devices['iPhone 13 Pro']
+                browser = p.chromium.launch()
+                context = browser.new_context(**device)
+            else:
+                browser = p.chromium.launch()
+                context = browser.new_context(viewport={'width': 1280, 'height': 800}, user_agent=UA_DESKTOP)
             
-        # Clean up raw directory
-        shutil.rmtree(raw_dir)
-        print(f"✓ ({len(generated_files)} pages)")
-        
-        return output_folder
-        
+            if cookies_file:
+                cookies = parse_netscape_cookies(cookies_file)
+                if cookies: context.add_cookies(cookies)
+                
+            page = context.new_page()
+            page.goto(url, wait_until="networkidle", timeout=60000)
+            remove_popups(page)
+            data = page.screenshot(full_page=True, type='png')
+            browser.close()
+            return (data, idx, title)
     except Exception as e:
-        print(f"  ✗ Error: {e}")
+        # Fail silently-ish to not break the batch, return None
         return None
 
 
-def extract_cbz_to_png(cbz_path, temp_dir):
-    """
-    Extract CBZ and convert to optimized PNGs
-    Returns the folder path with PNGs or None if failed
-    """
-    cbz_name = cbz_path.stem
-    output_folder = temp_dir / cbz_name
-    output_folder.mkdir(parents=True, exist_ok=True)
-    
+def extract_url_to_png(url, temp_dir):
     try:
-        with zipfile.ZipFile(cbz_path, 'r') as zip_ref:
-            file_list = zip_ref.namelist()
-            image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp')
-            os_metadata_exclusions = ('__macos') 
-            image_files = [f for f in file_list if f.lower().endswith(image_extensions) and not f.lower().startswith(os_metadata_exclusions)]
-            image_files.sort()
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("  ✗ Error: playwright not found. Please run: pip install playwright && playwright install")
+        return None
 
-            if not image_files:
-                print(f"  ✗ No images found in {cbz_name}")
-                return None
-            
-            print(f"  Extracting and converting {len(image_files)} pages...", end=" ", flush=True)
-            
-            if MANHWA:
-                def cbz_iterator():
-                    for idx, img_file in enumerate(image_files, 1):
-                        yield zip_ref.read(img_file), idx
-                
-                process_manhwa_stream(cbz_iterator(), output_folder)
-                return output_folder
+    name = re.sub(r'[^a-zA-Z0-9]', '_', url.split('//')[-1])[:50]
+    output_folder = temp_dir / name
+    output_folder.mkdir(parents=True, exist_ok=True)
 
-            with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
-                futures = []
-                for idx, img_file in enumerate(image_files, 1):
-                    img_data = zip_ref.read(img_file)
-                    output_base = output_folder / f"{idx:04d}"
-                    overlap = 50 if MANHWA else None
-                    futures.append(executor.submit(optimize_image, img_data, output_base, idx, overlap_percent=overlap))
+    print(f"  Loading {url} ({VIEWPORT})...", end=" ", flush=True)
+
+    captures = []
+
+    try:
+        # Initial Load & Extraction (Single Threaded)
+        with sync_playwright() as p:
+            if VIEWPORT == "mobile":
+                device = p.devices['iPhone 13 Pro']
+                browser = p.chromium.launch()
+                context = browser.new_context(**device)
+            else:
+                browser = p.chromium.launch()
+                context = browser.new_context(viewport={'width': 1280, 'height': 800}, user_agent=UA_DESKTOP)
+
+            if COOKIES_FILE:
+                cookies = parse_netscape_cookies(COOKIES_FILE)
+                if cookies: context.add_cookies(cookies)
+
+            page = context.new_page()
+            page.goto(url, wait_until="networkidle", timeout=60000)
+            time.sleep(2) 
+
+            if DYNAMIC_MODE:
+                print("\n  [Dynamic] Identifying interactive elements...", end=" ", flush=True)
+                try:
+                    page.evaluate("""() => {
+                        const candidates = Array.from(document.querySelectorAll('button, div[role="button"], span[class*="dropdown"], div[class*="list"]'));
+                        const badKeywords = ['menu', 'nav', 'hamburger', 'close', 'login', 'search'];
+                        candidates.forEach(el => {
+                            if (el.offsetParent === null) return;
+                            const text = (el.innerText || "").toLowerCase();
+                            const cls = (el.className || "").toLowerCase();
+                            const id = (el.id || "").toLowerCase();
+                            if (badKeywords.some(k => cls.includes(k) || id.includes(k))) return;
+                            if (text.includes('chapter') || text.includes('volume') || cls.includes('chapter') || cls.includes('dropdown')) {
+                                el.click();
+                            }
+                        });
+                    }""")
+                    time.sleep(2)
+                except: pass
+
+                print("Extracting links...", end=" ", flush=True)
+                links = page.evaluate("""() => {
+                    return Array.from(document.querySelectorAll('a[href]'))
+                        .filter(a => a.offsetParent !== null)
+                        .map(a => ({href: a.href, text: a.innerText.trim()}))
+                        .filter(l => l.text.length > 0 && !l.href.startsWith('javascript'));
+                }""")
                 
-                for _ in as_completed(futures):
-                    pass
-            
-            print(f"✓")
-            return output_folder
-            
+                unique_links = {}
+                for l in links:
+                    if l['href'] not in unique_links:
+                        unique_links[l['href']] = l['text']
+                
+                print(f" Found {len(unique_links)} links.")
+                
+                # Capture Main Page
+                remove_popups(page)
+                captures.append((page.screenshot(full_page=True, type='png'), 1, "Main Page"))
+                
+                link_items = []
+                base_domain = url.split('/')[2]
+                for i, (link_url, link_text) in enumerate(unique_links.items(), 2):
+                    if base_domain not in link_url: continue
+                    link_items.append((link_url, i, link_text[:50]))
+
+                browser.close() # Close initial browser to free resources if needed
+
+                # Crawl Sub-pages
+                total = len(link_items)
+                if PARALLEL_LINKS and total > 0:
+                    print(f"  Capturing {total} sub-pages (Parallel)...")
+                    workers = min(4, os.cpu_count() or 2)
+                    with ThreadPoolExecutor(max_workers=workers) as executor:
+                        # Prepare args: url, idx, title, viewport, cookies
+                        tasks = [(u, i, t, VIEWPORT, COOKIES_FILE) for u, i, t in link_items]
+                        futures = [executor.submit(capture_page_worker, t) for t in tasks]
+                        
+                        done_count = 0
+                        for f in as_completed(futures):
+                            res = f.result()
+                            done_count += 1
+                            print(f"\r    [{done_count}/{total}] Processing...", end="", flush=True)
+                            if res: captures.append(res)
+                else:
+                    # Sequential Reuse (Re-open browser)
+                    print(f"  Capturing {total} sub-pages (Sequential)...")
+                    with sync_playwright() as p:
+                        if VIEWPORT == "mobile":
+                            device = p.devices['iPhone 13 Pro']
+                            browser = p.chromium.launch()
+                            context = browser.new_context(**device)
+                        else:
+                            browser = p.chromium.launch()
+                            context = browser.new_context(viewport={'width': 1280, 'height': 800}, user_agent=UA_DESKTOP)
+                        if COOKIES_FILE:
+                            cookies = parse_netscape_cookies(COOKIES_FILE)
+                            if cookies: context.add_cookies(cookies)
+                        
+                        page = context.new_page()
+                        
+                        for idx, (link_url, i, link_text) in enumerate(link_items, 1):
+                            print(f"\r    [{idx}/{total}] {link_text}...", end="", flush=True)
+                            try:
+                                page.goto(link_url, wait_until="networkidle", timeout=30000)
+                                remove_popups(page)
+                                captures.append((page.screenshot(full_page=True, type='png'), i, link_text))
+                            except: pass
+                        browser.close()
+                print("") # Newline
+
+            else:
+                # Standard Mode
+                remove_popups(page)
+                captures.append((page.screenshot(full_page=True, type='png'), 1, "Main Page"))
+                browser.close()
+
+        # Sort captures by index
+        captures.sort(key=lambda x: x[1])
+
+        if MANHWA:
+            process_manhwa_stream(captures, output_folder)
+        else:
+            for img_data, idx, title in captures:
+                output_base = output_folder / f"{idx:04d}"
+                optimize_image(img_data, output_base, idx, overlap_percent=None)
+
+        print("✓")
+        return output_folder
+
     except Exception as e:
         print(f"  ✗ Error: {e}")
         return None
@@ -1045,25 +1121,33 @@ def convert_png_folder_to_xtc(png_folder, output_file, source_file=None):
             total_files = len(png_files)
             
             for i, p in enumerate(sorted_pages):
-                start = mapping[str(p)]
+                entry_data = mapping[str(p)]
+                # Handle legacy format (int) or new format (dict)
+                if isinstance(entry_data, int):
+                    start = entry_data
+                    title_text = f"Page {p}"
+                else:
+                    start = entry_data['start']
+                    title_text = entry_data.get('title', f"Page {p}")
+
                 # Ensure start is within bounds
                 if start > total_files: start = total_files
                 
                 # End is start of next - 1, or last file
                 if i < len(sorted_pages) - 1:
                     next_p = sorted_pages[i+1]
-                    end = mapping[str(next_p)]
+                    next_data = mapping[str(next_p)]
+                    end = next_data if isinstance(next_data, int) else next_data['start']
+                    
                     if end > total_files: end = total_files
                     
-                    # Convert 'start of next' to 'inclusive end of current'
                     if end > start: end -= 1
                     
-                    # If next page starts on same screen (rare but possible), ensure end >= start
                     if end < start: end = start
                 else:
                     end = total_files
                 
-                page_ranges[p] = {'start': start, 'end': end}
+                page_ranges[p] = {'start': start, 'end': end, 'title': title_text}
         except Exception as e:
             print(f"Warning: Failed to load manhwa map: {e}")
             pass
@@ -1077,7 +1161,7 @@ def convert_png_folder_to_xtc(png_folder, output_file, source_file=None):
                 orig_page = int(m.group(1))
                 
                 if orig_page not in page_ranges:
-                    page_ranges[orig_page] = {'start': idx, 'end': idx}
+                    page_ranges[orig_page] = {'start': idx, 'end': idx, 'title': f"Page {orig_page}"}
                 else:
                     page_ranges[orig_page]['end'] = idx
             except (ValueError, IndexError):
@@ -1085,20 +1169,14 @@ def convert_png_folder_to_xtc(png_folder, output_file, source_file=None):
 
     # Generate TOC
     toc = []
-    page_titles = {}
-    if source_file and source_file.suffix.lower() == '.cbz':
-        page_titles = get_cbz_bookmarks(source_file)
     
     # Create TOC entry for every original page
     for orig_page in sorted(page_ranges.keys()):
-        title = f"Page {orig_page}"
-        if orig_page in page_titles:
-            title = f"{title} - {page_titles[orig_page]}"
-            
+        entry = page_ranges[orig_page]
         toc.append({
-            "title": title,
-            "page": page_ranges[orig_page]['start'],
-            "end": page_ranges[orig_page]['end']
+            "title": entry.get('title', f"Page {orig_page}"),
+            "page": entry['start'],
+            "end": entry['end']
         })
 
     try:
@@ -1120,56 +1198,58 @@ def convert_png_folder_to_xtc(png_folder, output_file, source_file=None):
         return False
 
 
-def process_file(file_path, output_dir, temp_dir, clean_temp, file_num=None, total_files=None):
-    """
-    Full pipeline: File (CBZ/PDF) → PNG → XTC
-    """
+def process_file(input_obj, output_dir, temp_dir, clean_temp, file_num=None, total_files=None):
     progress_prefix = f"[{file_num}/{total_files}] " if file_num and total_files else ""
-    print(f"\n{progress_prefix}Processing: {file_path.name}")
+    is_url = str(input_obj).startswith('http')
+    
+    if is_url:
+        print(f"\n{progress_prefix}Processing URL: {input_obj}")
+    else:
+        print(f"\n{progress_prefix}Processing: {input_obj.name}")
     
     start_time = time.time()
     
-    # Step 1: Extract and optimize to PNG
-    if file_path.suffix.lower() == '.pdf':
-        png_folder = extract_pdf_to_png(file_path, temp_dir)
+    if is_url:
+        png_folder = extract_url_to_png(input_obj, temp_dir)
+        name = re.sub(r'[^a-zA-Z0-9]', '_', str(input_obj).split('//')[-1])[:30]
     else:
-        png_folder = extract_cbz_to_png(file_path, temp_dir)
+        # File path
+        if input_obj.suffix.lower() == '.pdf':
+            # Not supported in web2xtc really, but keeping legacy structure
+            # user should use cbz2xtc for files
+            print("  ✗ PDF/CBZ not supported in web2xtc (use cbz2xtc)")
+            return False, input_obj.name, 0
+        else:
+            return False, input_obj.name, 0
         
     if not png_folder:
-        return False, file_path.name, 0
+        return False, name, 0
     
-    # Step 2: Convert to XTC
-    # Use .xtch extension for 2-bit mode, .xtc for 1-bit
     ext = ".xtch" if XTC_MODE == "2bit" else ".xtc"
-    output_file = output_dir / f"{file_path.stem}{ext}"
+    output_file = output_dir / f"{name}{ext}"
     
-    success = convert_png_folder_to_xtc(png_folder, output_file, source_file=file_path)
+    success = convert_png_folder_to_xtc(png_folder, output_file)
     
-    # Step 3: Clean up temp files if requested
     if clean_temp and png_folder.exists():
         shutil.rmtree(png_folder)
     
     elapsed = time.time() - start_time
-    return success, file_path.name, elapsed
+    return success, name, elapsed
 
 
 def main():
     print("=" * 60)
-    print("CBZ to XTC Converter for XTEink X4")
+    print("Web to XTC Converter for XTEink X4")
     print("=" * 60)
     
     # Check for help flag
     if "--help" in sys.argv or "-h" in sys.argv:
-        print("\nConverts CBZ manga and PDF files to XTC format optimized for XTEink X4")
+        print("\nConverts Websites to XTC format optimized for XTEink X4 using Playwright")
         print("\nUsage:")
-        print("  cbz2xtc                           # Process current directory")
-        print("  cbz2xtc /path/to/folder           # Process specific folder")
-        print("  cbz2xtc --no-dither               # Disable dithering (threshold)")
-        print("  cbz2xtc --dither <algo>           # Select dithering: floyd, ordered, rasterize, none")
-        print("  cbz2xtc --2bit                    # Use 2-bit (4-level) grayscale mode (outputs .xtch)")
-        print("  cbz2xtc --gamma <float>           # Adjust brightness (0.5 = brighter, 1.0 = normal)")
-        print("  cbz2xtc --invert                  # Invert colors (White <-> Black)")
-        print("  cbz2xtc --clean                   # Auto-delete temp PNG files")
+        print("  web2xtc <url>                     # Process URL")
+        print("  web2xtc <url> --manhwa            # Process as Manhwa (stitched)")
+        print("  web2xtc <url> --viewport mobile   # Use mobile viewport")
+        print("  web2xtc <url> --cookies cookies.txt # Load Netscape cookies")
         print("\nDithering Algorithms:")
         print("  atkinson   - Atkinson (Default, sharp shading)")
         print("  floyd      - Floyd-Steinberg (Smooth gradients)")
@@ -1180,12 +1260,13 @@ def main():
         print("  --no-dither   Same as --dither none")
         print("  --2bit        Output 2-bit grayscale XTCH files instead of 1-bit XTC.")
         print("                (Dithering works with 2-bit mode too)")
+        print("  --viewport <type>   Set viewport: 'desktop' (1280x800, default) or 'mobile' (iPhone 13 Pro)")
+        print("  --cookies <file>    Load cookies from a Netscape formatted file (e.g. from extensions)")
         print("\n  --overlap     Split into 3 overlapping screen-filling pieces instead")
         print("                of 2 non-overlapping pieces that may leave margins.")
         print("\n  --split-spreads all or <pagenum> or <pagenum,pagenum,pagenum...>")
         print("                Splits wide pages in half, and then split each of the")
-        print("                halves as if they were normal pages. Useful if the")
-        print("                wide pages are double-page spreads with text.")
+        print("                halves as if they were normal pages.")
         print("\n  --split-all   Splits ALL pages into pieces, even if those pages")
         print("                are wider than they are tall.")
         print("\n  --skip <pagenum> or <pagenum,pagenum,pagenum...>   skips page")
@@ -1216,79 +1297,51 @@ def main():
         print("\n  --help, -h    Show this help message")
         return 0
     
-    # Parse arguments
-    global OVERLAP
-    global SPLIT_SPREADS
-    global SPLIT_SPREADS_PAGES
-    global SPLIT_ALL
-    global SKIP_ON
-    global SKIP_PAGES
-    global ONLY_ON
-    global ONLY_PAGES
-    global DONT_SPLIT
-    global DONT_SPLIT_PAGES
-    global CONTRAST_BOOST
-    global CONTRAST_VALUE
-    global MARGIN
-    global MARGIN_VALUE
-    global INCLUDE_OVERVIEWS
-    global SIDEWAYS_OVERVIEWS
-    global SELECT_OVERVIEWS
-    global SELECT_OV_PAGES
-    global START_PAGE
-    global STOP_PAGE
-    global DESIRED_V_OVERLAP_SEGMENTS
-    global SET_H_OVERLAP_SEGMENTS
-    global MINIMUM_V_OVERLAP_PERCENT
-    global SET_H_OVERLAP_PERCENT
-    global MAX_SPLIT_WIDTH
-    global SAMPLE_SET
-    global SAMPLE_PAGES
-    global PADDING_COLOR
-    global LANDSCAPE_RTL
-    global MANHWA
-    
-    # New globals
-    global XTC_MODE
-    global DITHER_ALGO
-    global GAMMA_VALUE
-    global INVERT_COLORS
-
+    # Parse globals
+    global OVERLAP, SPLIT_SPREADS, SPLIT_SPREADS_PAGES, SPLIT_ALL, SKIP_ON, SKIP_PAGES, ONLY_ON, ONLY_PAGES
+    global DONT_SPLIT, DONT_SPLIT_PAGES, CONTRAST_BOOST, CONTRAST_VALUE, MARGIN, MARGIN_VALUE
+    global INCLUDE_OVERVIEWS, SIDEWAYS_OVERVIEWS, SELECT_OVERVIEWS, SELECT_OV_PAGES
+    global START_PAGE, STOP_PAGE, SAMPLE_SET, SAMPLE_PAGES
+    global DESIRED_V_OVERLAP_SEGMENTS, SET_H_OVERLAP_SEGMENTS, MINIMUM_V_OVERLAP_PERCENT, SET_H_OVERLAP_PERCENT
+    global MAX_SPLIT_WIDTH, PADDING_COLOR, LANDSCAPE_RTL, MANHWA
+    global XTC_MODE, DITHER_ALGO, GAMMA_VALUE, INVERT_COLORS, VIEWPORT, COOKIES_FILE, DYNAMIC_MODE, PARALLEL_LINKS
 
     clean_temp = "--clean" in sys.argv
     INVERT_COLORS = "--invert" in sys.argv
     LANDSCAPE_RTL = "--landscape-rtl" in sys.argv
     MANHWA = "--manhwa" in sys.argv
+    DYNAMIC_MODE = "--dynamic" in sys.argv
+    PARALLEL_LINKS = "--parallel-links" in sys.argv
     
     if "--gamma" in sys.argv:
         try:
             idx = sys.argv.index("--gamma")
             GAMMA_VALUE = float(sys.argv[idx + 1])
-        except (ValueError, IndexError):
-            print("Warning: Invalid value for --gamma, using default 1.0")
+        except: pass
     
-    # Handle dithering args
-    if "--no-dither" in sys.argv:
-        DITHER_ALGO = "none"
-    else:
-        # Check for --dither <val>
-        if "--dither" in sys.argv:
-            try:
-                idx = sys.argv.index("--dither")
-                if idx + 1 < len(sys.argv) and not sys.argv[idx+1].startswith("--"):
-                    val = sys.argv[idx + 1].lower()
-                    if val in DITHER_MAP:
-                        DITHER_ALGO = val
-                    else:
-                        print(f"Warning: Unknown dither algo '{val}', using default 'floyd'")
-                else:
-                    print("Warning: --dither flag missing value, using default")
-            except IndexError:
-                print("Warning: --dither flag missing value, using default")
+    if "--no-dither" in sys.argv: DITHER_ALGO = "none"
+    if "--dither" in sys.argv:
+        try:
+            idx = sys.argv.index("--dither")
+            val = sys.argv[idx+1].lower()
+            if val in DITHER_MAP: DITHER_ALGO = val
+        except: pass
     
-    if "--2bit" in sys.argv:
-        XTC_MODE = "2bit"
+    if "--2bit" in sys.argv: XTC_MODE = "2bit"
+    if "--viewport" in sys.argv:
+        try:
+            idx = sys.argv.index("--viewport")
+            val = sys.argv[idx+1].lower()
+            if val in ["mobile", "desktop"]: VIEWPORT = val
+        except: pass
+        
+    if "--cookies" in sys.argv:
+        try:
+            idx = sys.argv.index("--cookies")
+            COOKIES_FILE = sys.argv[idx+1]
+        except: pass
 
+    # Set defaults for other globals
     OVERLAP = "--overlap" in sys.argv
     SPLIT_SPREADS = "--split-spreads" in sys.argv
     SPLIT_ALL = "--split-all" in sys.argv
@@ -1296,207 +1349,64 @@ def main():
     ONLY_ON = "--only" in sys.argv
     DONT_SPLIT = "--dont-split" in sys.argv
     CONTRAST_BOOST = "--contrast-boost" in sys.argv
-    MARGIN = "--margin" in sys.argv or "--margins" in sys.argv
+    MARGIN = "--margin" in sys.argv
     INCLUDE_OVERVIEWS = "--include-overviews" in sys.argv
     SIDEWAYS_OVERVIEWS = "--sideways-overviews" in sys.argv
     SELECT_OVERVIEWS = "--select-overviews" in sys.argv
-    START_PAGE = False
-    STOP_PAGE = False
+    START_PAGE = False; STOP_PAGE = False
     SAMPLE_SET = "--sample-set" in sys.argv
-    SPLIT_SPREADS_PAGES = []
-    SKIP_PAGES = []
-    ONLY_PAGES = []
-    DONT_SPLIT_PAGES = []
-    SELECT_OV_PAGES = []
-    DESIRED_V_OVERLAP_SEGMENTS = 3
-    SET_H_OVERLAP_SEGMENTS = 1
-    MINIMUM_V_OVERLAP_PERCENT = 5
-    SET_H_OVERLAP_PERCENT = 70
-    MAX_SPLIT_WIDTH = 800
-    PADDING_COLOR = 255
+    SPLIT_SPREADS_PAGES = []; SKIP_PAGES = []; ONLY_PAGES = []
+    DONT_SPLIT_PAGES = []; SELECT_OV_PAGES = []; SAMPLE_PAGES = []
+    DESIRED_V_OVERLAP_SEGMENTS = 3; SET_H_OVERLAP_SEGMENTS = 1
+    MINIMUM_V_OVERLAP_PERCENT = 5; SET_H_OVERLAP_PERCENT = 70
+    MAX_SPLIT_WIDTH = 800; PADDING_COLOR = 255
+    if "--pad-black" in sys.argv: PADDING_COLOR = 0
 
-    if "--pad-black" in sys.argv:
-        PADDING_COLOR = 0
-
-    # Parse value args (reuse loop from original)
+    # Parse value args (simplified)
     i = 1
-    args = []
     while i < len(sys.argv):
         arg = sys.argv[i]
-        # Skip value args we already handled or boolean args
-        if arg in ["--dither", "--2bit", "--no-dither", "--clean", "--overlap", "--split-all", "--pad-black", "--include-overviews", "--sideways-overviews", "--gamma", "--invert"]:
-            if arg == "--dither" or arg == "--gamma":
-                 i += 1 # skip value
-            # booleans are already handled
-        elif arg == "--split-spreads":
-            if i+1 < len(sys.argv) and not sys.argv[i+1].startswith("--"):
-                 SPLIT_SPREADS_PAGES = sys.argv[i+1].split(',')
-                 i += 1
-            else:
-                 SPLIT_SPREADS_PAGES = ["all"]
-        elif arg == "--skip":
-            SKIP_PAGES = sys.argv[i+1].split(',')
-            i += 1
-        elif arg == "--only":
-            ONLY_PAGES = sys.argv[i+1].split(',')
-            i += 1
-        elif arg == "--dont-split":
-            DONT_SPLIT_PAGES = sys.argv[i+1].split(',')
-            i += 1
-        elif arg == "--contrast-boost":
-            CONTRAST_VALUE = sys.argv[i+1]
-            i += 1
-        elif arg == "--margin" or arg== "--margins":
-            MARGIN_VALUE = sys.argv[i+1]
-            i += 1
-        elif arg == "--select-overviews":
-            SELECT_OV_PAGES = sys.argv[i+1].split(',')
-            i += 1
-        elif arg == "--start":
-            START_PAGE = int(sys.argv[i+1])
-            i += 1
-        elif arg == "--stop":
-            STOP_PAGE = int(sys.argv[i+1])
-            i += 1
-        elif arg == "--vsplit-target":
-            OVERLAP = True 
-            DESIRED_V_OVERLAP_SEGMENTS = int(sys.argv[i+1])
-            i += 1
-        elif arg == "--vsplit-min-overlap":
-            MINIMUM_V_OVERLAP_PERCENT = float(sys.argv[i+1])
-            i += 1
-        elif arg == "--hsplit-count":
-            OVERLAP = True
-            SET_H_OVERLAP_SEGMENTS = int(sys.argv[i+1])
-            i += 1
-        elif arg == "--hsplit-overlap":
-            SET_H_OVERLAP_PERCENT = float(sys.argv[i+1])
-            i += 1
-        elif arg == "--hsplit-max-width":
-            MAX_SPLIT_WIDTH = int(sys.argv[i+1])
-            i += 1
-        elif arg == "--sample-set":
-            SAMPLE_PAGES = sys.argv[i+1].split(',')
-            i += 1
-        elif arg.startswith("--"):
-            pass 
-        else:
-            args.append(arg)
+        if arg == "--contrast-boost": CONTRAST_VALUE = sys.argv[i+1]
+        elif arg == "--margin": MARGIN_VALUE = sys.argv[i+1]
+        elif arg == "--vsplit-target": 
+            OVERLAP = True; DESIRED_V_OVERLAP_SEGMENTS = int(sys.argv[i+1])
+        elif arg == "--cookies": pass
         i += 1
 
-    # Get input path
-    if args:
-        input_path = Path(args[0])
-    else:
-        input_path = Path.cwd()
+    input_arg = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else ""
     
-    if not input_path.exists():
-        print(f"Error: Path '{input_path}' does not exist")
+    if not input_arg:
+        print("Usage: web2xtc <url> [options]")
         return 1
-    
-    # Define directory for output/temp based on input
-    if input_path.is_file():
-        base_dir = input_path.parent
-    else:
-        base_dir = input_path
 
-    print(f"\nInput: {input_path.absolute()}")
-    print(f"Mode: {XTC_MODE} ({'4-level grayscale' if XTC_MODE=='2bit' else '1-bit B&W'})")
-    print(f"Dithering: {DITHER_ALGO.upper()}")
-    if GAMMA_VALUE != 1.0:
-        print(f"Gamma: {GAMMA_VALUE}")
-    if INVERT_COLORS:
-        print("Invert Colors: ENABLED")
+    input_list = [input_arg] if input_arg.startswith("http") else []
     
-    # Create output and temp directories
+    if not input_list:
+        print("Error: Please provide a valid URL starting with http/https")
+        return 1
+
+    base_dir = Path.cwd()
     output_dir = base_dir / "xtc_output"
-    temp_dir = base_dir / ".temp_png"
-    
+    temp_dir = base_dir / ".temp_web"
     output_dir.mkdir(exist_ok=True)
     temp_dir.mkdir(exist_ok=True)
-    
-    # Find all files (CBZ/PDF)
-    input_files = []
-    
-    if input_path.is_file():
-        if input_path.suffix.lower() in [".pdf", ".cbz"]:
-            input_files = [input_path]
-    else:
-        # Check current directory
-        input_files.extend(sorted(input_path.glob("*.cbz")))
-        input_files.extend(sorted(input_path.glob("*.CBZ")))
-        input_files.extend(sorted(input_path.glob("*.pdf")))
-        input_files.extend(sorted(input_path.glob("*.PDF")))
-        
-        # Only check subdirectories if no files found in current directory
-        if not input_files:
-            for subdir in input_path.iterdir():
-                if subdir.is_dir() and subdir.name not in ["xtc_output", ".temp_png"]:
-                    input_files.extend(sorted(subdir.glob("*.cbz")))
-                    input_files.extend(sorted(subdir.glob("*.CBZ")))
-                    input_files.extend(sorted(subdir.glob("*.pdf")))
-                    input_files.extend(sorted(subdir.glob("*.PDF")))
-    
-    # Remove any duplicates
-    input_files = list(dict.fromkeys(input_files))
-    
-    if not input_files:
-        print(f"\nNo CBZ or PDF files found in '{base_dir}' or its subdirectories")
-        return 1
-    
-    print(f"\nFound {len(input_files)} file(s)")
-    print(f"Output directory: {output_dir.absolute()}")
-    print(f"Temp directory: {temp_dir.absolute()}")
-    if clean_temp:
-        print("Clean mode: Temporary files will be deleted after conversion")
-    print("-" * 60)
-    
-    # Internal encoder used, no need to check for png2xtc.py
-    
-    max_workers = min(4, os.cpu_count() or 1)
-    print(f"Threads: {max_workers} (parallel processing)")
 
-    start_time = time.time()
-    success_count = 0
-    total_time = 0
-    
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_file = {
-            executor.submit(process_file, f, output_dir, temp_dir, clean_temp, idx, len(input_files)): f
-            for idx, f in enumerate(input_files, 1)
-        }
-        
-        for future in as_completed(future_to_file):
-            success, filename, elapsed = future.result()
-            if success:
-                success_count += 1
-                total_time += elapsed
-                avg_time = total_time / success_count
-                remaining = (len(input_files) - success_count) * avg_time
-                print(f"  ⏱  {elapsed:.1f}s | Est. remaining: {remaining/60:.1f}min")
-    
-    elapsed_total = time.time() - start_time
-    
-    print("-" * 60)
-    print(f"\nCompleted! Successfully converted {success_count}/{len(input_files)} files")
-    print(f"Total time: {elapsed_total/60:.1f} minutes")
-    print(f"Average: {elapsed_total/len(input_files):.1f}s per file")
-    print(f"\nXTC files are in: {output_dir.absolute()}")
-    
-    if clean_temp:
-        try:
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir)
-                print("Temporary files cleaned up")
-        except:
-            pass
-    else:
-        print(f"Temporary PNG files are in: {temp_dir.absolute()}")
-    
-    print("\nTransfer the .xtc/.xtch files to your XTEink X4!")
-    
-    return 0 if success_count == len(input_files) else 1
+    print(f"Input: {input_list[0]}")
+    print(f"Viewport: {VIEWPORT.upper()}")
+    print(f"Mode: {XTC_MODE}")
+    if MANHWA: print("Manhwa Mode: ENABLED")
 
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(process_file, input_list[0], output_dir, temp_dir, clean_temp, 1, 1)
+        success, filename, elapsed = future.result()
+        if success:
+            print(f"  ⏱  {elapsed:.1f}s")
+
+    if clean_temp:
+        try: shutil.rmtree(temp_dir)
+        except: pass
+    
+    return 0 if success else 1
 
 if __name__ == "__main__":
     sys.exit(main())
