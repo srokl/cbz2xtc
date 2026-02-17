@@ -962,7 +962,15 @@ def capture_page_worker(args):
                 if cookies: context.add_cookies(cookies)
                 
             page = context.new_page()
-            page.goto(url, wait_until="networkidle", timeout=60000)
+            
+            if WEBSITE_MODE == "notion":
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    page.wait_for_selector(".notion-app", timeout=30000)
+                    time.sleep(2)
+                except: pass
+            else:
+                page.goto(url, wait_until="networkidle", timeout=60000)
             
             # Pre-processing
             scroll_page(page)
@@ -1009,7 +1017,21 @@ def extract_url_to_png(url, temp_dir):
                 if cookies: context.add_cookies(cookies)
 
             page = context.new_page()
-            page.goto(url, wait_until="networkidle", timeout=60000)
+            
+            if WEBSITE_MODE == "notion":
+                # Notion is an SPA and often never settles networkidle due to background polling
+                print("  [Notion] Using SPA loading strategy...", end=" ", flush=True)
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                try:
+                    # Wait for the main app container
+                    page.wait_for_selector(".notion-app", timeout=30000)
+                    # Give it extra time for hydration/rendering
+                    time.sleep(5)
+                except Exception as e:
+                    print(f" (Warning: {e})", end="")
+            else:
+                page.goto(url, wait_until="networkidle", timeout=60000)
+            
             time.sleep(2) 
 
             if WEBSITE_MODE == 'wikipedia':
@@ -1112,7 +1134,15 @@ def extract_url_to_png(url, temp_dir):
                         for idx, (link_url, i, link_text) in enumerate(link_items, 1):
                             print(f"\r    [{idx}/{total}] {link_text}...", end="", flush=True)
                             try:
-                                page.goto(link_url, wait_until="networkidle", timeout=30000)
+                                if WEBSITE_MODE == "notion":
+                                    page.goto(link_url, wait_until="domcontentloaded", timeout=30000)
+                                    try:
+                                        page.wait_for_selector(".notion-app", timeout=10000)
+                                        time.sleep(1)
+                                    except: pass
+                                else:
+                                    page.goto(link_url, wait_until="networkidle", timeout=30000)
+                                
                                 scroll_page(page)
                                 clean_page(page)
                                 captures.append((page.screenshot(full_page=True, type='png'), i, link_text))
@@ -1373,6 +1403,9 @@ def main():
     # Auto-detect website mode
     if "wikipedia.org" in input_list[0] or "wiktionary.org" in input_list[0]:
         WEBSITE_MODE = "wikipedia"
+        print(f"Website Mode: {WEBSITE_MODE.upper()} (Auto-detected)")
+    elif "notion.site" in input_list[0]:
+        WEBSITE_MODE = "notion"
         print(f"Website Mode: {WEBSITE_MODE.upper()} (Auto-detected)")
     
     if "--gamma" in sys.argv:
