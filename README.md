@@ -15,13 +15,19 @@ Open your terminal (Command Prompt on Windows, Terminal on macOS/Linux) and run:
 pip install pillow numpy numba pymupdf playwright
 ```
 
-### 3. Web Support (For web2xtc)
+### 3. Web Support (For web2xtc.py)
 After installing playwright (above), you must install the browsers:
 ```bash
 playwright install
 ```
 
-### 4. PDF Support (Optional)
+### 4. Video Support (For video2xtc.py)
+Install `ffmpeg`:
+- **macOS**: `brew install ffmpeg`
+- **Linux**: `sudo apt install ffmpeg`
+- **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH.
+
+### 5. PDF Support (Optional)
 - For `cbz2xtc.py`: `pymupdf` (installed above) is used.
 - For `cbz2xtcpoppler.py`: Install `poppler-utils`.
   - **macOS**: `brew install poppler`
@@ -30,23 +36,28 @@ playwright install
 
 ## How to Run
 
-1. Place your `.cbz` or `.pdf` files in a folder.
+1. Place your `.cbz`, `.pdf`, or video files in a folder.
 2. Open your terminal in that folder.
 3. Run the script:
 
 **Windows**:
 ```cmd
-python cbz2xtc.py --2bit --clean
+python cbz2xtc.py <options>
 ```
 
 **macOS / Linux**:
 ```bash
-python3 cbz2xtc.py --2bit --clean
+python3 cbz2xtc.py <options>
 ```
 
-### Running web2xtc (Website Converter)
+### Running web2xtc.py (Website Converter)
 ```bash
-./web2xtc "https://example.com/manga" --manhwa --dynamic
+python3 web2xtc.py "https://example.com/manga" --dynamic
+```
+
+### Running video2xtc.py (Video Converter)
+```bash
+python3 video2xtc.py movie.mp4 --fps 1
 ```
 
 ## Tools
@@ -57,32 +68,49 @@ Processes multiple pages and files in parallel.
 - **Overviews**: Generates full-page views to show the layout before the splits.
 - **Fast Encoding**: Uses NumPy to process images quickly.
 
-### web2xtc
+### cbz2xtcpoppler.py
+An alternative PDF converter that uses Poppler for potentially better rendering on some PDFs.
+
+### web2xtc.py
 Converts websites directly to XTC/XTCH format.
 - **Full Page Capture**: Screenshots the entire scrolling page.
 - **Dynamic Mode**: Expands dropdowns and crawls links (chapters/sub-pages).
-- **Mobile/Desktop**: Simulates iPhone 13 Pro or Desktop viewport.
+- **Mobile/Desktop**: Mobile or Desktop viewport.
+
+### video2xtc.py
+Converts video files (MP4, MKV, AVI, etc.) to XTC/XTCH format.
+- **FPS Control**: Extract frames at a custom rate (e.g., 1 frame per second).
+- **Auto-Rotation**: Automatically rotates landscape videos to fit the portrait screen.
+- **High Performance**: Uses FFmpeg for extraction and Numba for fast dithering.
 
 ### image2xth.py
-Converts a single image (like a wallpaper) to XTCH format.
+Converts a single image (like a wallpaper) to XTCH (2-bit grayscale) format.
+- Supports **Cover**, **Letterbox**, and **Fill** modes.
 
 ### image2bw.py
-Converts a single image to 1-bit BMP format.
+Converts a single image to 1-bit BMP format (perfect for fast-loading backgrounds).
 
 ## Options Reference
 
-### General Options (cbz2xtc & web2xtc)
+### General Options (cbz2xtc, web2xtc, video2xtc)
 | Option | Effect |
 | :--- | :--- |
 | `--2bit` | Use 4-level grayscale (higher quality). |
-| `--manhwa` | Use 75% overlap for long-strip webtoons. |
+| `--manhwa` | Use 75% overlap for long-strip webtoons (cbz/web only). |
 | `--landscape-rtl` | Process wide pages from Right-to-Left (for Japanese manga). |
 | `--include-overviews` | Add an upright full-page preview before segments. |
 | `--sideways-overviews` | Add a rotated full-page preview (-90 degrees). |
 | `--gamma 0.7` | Brighten the image (use values like 0.5 to 0.9). |
 | `--clean` | Delete temporary files after the conversion is done. |
 
-### Web Options (web2xtc only)
+### Video Options (video2xtc.py only)
+| Option | Effect |
+| :--- | :--- |
+| `--fps 1.0` | Frames per second to extract (Default: 1.0). |
+| `--invert` | Invert colors (White <-> Black). |
+| `--dither atkinson` | Dithering: atkinson, floyd, ordered, none. |
+
+### Web Options (web2xtc.py only)
 | Option | Effect |
 | :--- | :--- |
 | `--dynamic` | Expands menus and crawls 1st-page links (chapters). |

@@ -1295,8 +1295,7 @@ def main():
         print("\nConverts Websites to XTC format optimized for XTEink X4 using Playwright")
         print("\nUsage:")
         print("  web2xtc <url>                     # Process URL")
-        print("  web2xtc <url> --manhwa            # Process as Manhwa (stitched)")
-        print("  web2xtc <url> --viewport mobile   # Use mobile viewport")
+        print("  web2xtc <url> --viewport mobile   # Use mobile viewport (enables Manhwa mode)")
         print("  web2xtc <url> --cookies cookies.txt # Load Netscape cookies")
         print("\nDithering Algorithms:")
         print("  atkinson   - Atkinson (Default, sharp shading)")
@@ -1340,7 +1339,6 @@ def main():
         print("\n  --vsplit-min-overlap <float>   minimum vertical overlap between segments.")
         print("\n  --sample-set <pagenum> ...  Build a spread of contrast samples.")
         print("\n  --landscape-rtl   Process landscape spreads from Right to Left.")
-        print("\n  --manhwa          Use 50% vertical overlap (ideal for webtoons).")
         print("\n  --clean       Automatically delete temporary PNG files after conversion.")
         print("\n  --help, -h    Show this help message")
         return 0
@@ -1357,15 +1355,25 @@ def main():
     clean_temp = "--clean" in sys.argv
     INVERT_COLORS = "--invert" in sys.argv
     LANDSCAPE_RTL = "--landscape-rtl" in sys.argv
-    MANHWA = "--manhwa" in sys.argv
     DYNAMIC_MODE = "--dynamic" in sys.argv
     PARALLEL_LINKS = "--parallel-links" in sys.argv
     
-    if "--website" in sys.argv:
-        try:
-            idx = sys.argv.index("--website")
-            WEBSITE_MODE = sys.argv[idx+1].lower()
-        except: pass
+    input_arg = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else ""
+    
+    if not input_arg:
+        print("Usage: web2xtc <url> [options]")
+        return 1
+
+    input_list = [input_arg] if input_arg.startswith("http") else []
+    
+    if not input_list:
+        print("Error: Please provide a valid URL starting with http/https")
+        return 1
+
+    # Auto-detect website mode
+    if "wikipedia.org" in input_list[0] or "wiktionary.org" in input_list[0]:
+        WEBSITE_MODE = "wikipedia"
+        print(f"Website Mode: {WEBSITE_MODE.upper()} (Auto-detected)")
     
     if "--gamma" in sys.argv:
         try:
@@ -1394,6 +1402,9 @@ def main():
             idx = sys.argv.index("--cookies")
             COOKIES_FILE = sys.argv[idx+1]
         except: pass
+
+    # Bind Manhwa mode to mobile viewport
+    MANHWA = (VIEWPORT == "mobile")
 
     # Set defaults for other globals
     OVERLAP = "--overlap" in sys.argv
@@ -1425,7 +1436,6 @@ def main():
         elif arg == "--vsplit-target": 
             OVERLAP = True; DESIRED_V_OVERLAP_SEGMENTS = int(sys.argv[i+1])
         elif arg == "--cookies": pass
-        elif arg == "--website": pass
         i += 1
 
     input_arg = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else ""
