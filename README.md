@@ -59,7 +59,7 @@ python3 web2xtc.py "https://example.com/manga" <options>
 ```bash
 python3 video2xtc.py movie.mp4 <options>
 ```
-### CLI Examples
+## CLI Examples
 Open your terminal (Command Prompt on Windows, Terminal on macOS/Linux) and run:
 ### cbz2xtc.py or cbz2xtcpoppler.py
 The default is xtc 1-bit.
