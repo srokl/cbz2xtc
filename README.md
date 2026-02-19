@@ -61,7 +61,7 @@ python3 video2xtc.py movie.mp4 <options>
 ```
 ### CLI Examples
 Open your terminal (Command Prompt on Windows, Terminal on macOS/Linux) and run:
-###cbz2xtc.py or cbz2xtcpoppler.py
+### cbz2xtc.py or cbz2xtcpoppler.py
 The default is xtc 1-bit.
 - for 2-bit manga
 ```bash
@@ -75,11 +75,11 @@ python cbz2xtc.py --manhwa
 ```bash
 python cbz2xtc.py --2bit
 ```
-###cbz2xth.py
+### cbz2xth.py
 ```bash
 python image2xth.py input.png
 ```
-###web2xtc.py
+### web2xtc.py
 -for mobile Continuous portrait scrolling.
 ```bash
 python web2xtc.py 'https://example.com/' --viewport mobile
@@ -92,7 +92,7 @@ python web2xtc.py 'https://example.com/' --viewport mobile --dynamic --parallel-
 ```bash
 python web2xtc.py 'https://example.com/' --viewport mobile --dynamic --parallel-links --cookies cookie.txt
 ```
-###video2xtc.py
+### video2xtc.py
 ```bash
 python video2xtc.py video.mp4
 ```
