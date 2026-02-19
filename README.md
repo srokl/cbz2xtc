@@ -27,7 +27,7 @@ Install `ffmpeg`:
 - **Linux**: `sudo apt install ffmpeg`
 - **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH.
 
-### 5. PDF Support (Optional)
+### 5. PDF Support
 - For `cbz2xtc.py`: `pymupdf` (installed above) is used.
 - For `cbz2xtcpoppler.py`: Install `poppler-utils`.
   - **macOS**: `brew install poppler`
@@ -52,13 +52,51 @@ python3 cbz2xtc.py <options>
 
 ### Running web2xtc.py (Website Converter)
 ```bash
-python3 web2xtc.py "https://example.com/manga" --dynamic
+python3 web2xtc.py "https://example.com/manga" <options>
 ```
 
 ### Running video2xtc.py (Video Converter)
 ```bash
-python3 video2xtc.py movie.mp4 --fps 1
+python3 video2xtc.py movie.mp4 <options>
 ```
+### CLI Examples
+Open your terminal (Command Prompt on Windows, Terminal on macOS/Linux) and run:
+###cbz2xtc.py or cbz2xtcpoppler.py
+The default is xtc 1-bit.
+- for 2-bit manga
+```bash
+python cbz2xtc.py --2bit --landscape-rtl --sideways-overviews
+```
+- for manhwa
+```bash
+python cbz2xtc.py --manhwa
+```
+- for pdf
+```bash
+python cbz2xtc.py --2bit
+```
+###cbz2xth.py
+```bash
+python image2xth.py input.png
+```
+###web2xtc.py
+-for mobile Continuous portrait scrolling.
+```bash
+python web2xtc.py 'https://example.com/' --viewport mobile
+```
+-for mobile Continuous portrait scrolling with 1st page hyperlinks as TOC chapters.
+```bash
+python web2xtc.py 'https://example.com/' --viewport mobile --dynamic --parallel-links
+```
+-for mobile Continuous portrait scrolling with 1st page hyperlinks as TOC chapters and with cookies for websites like forums and social media.
+```bash
+python web2xtc.py 'https://example.com/' --viewport mobile --dynamic --parallel-links --cookies cookie.txt
+```
+###video2xtc.py
+```bash
+python video2xtc.py video.mp4
+```
+
 
 ## Tools
 
@@ -139,9 +177,3 @@ The tool splits images into segments to fill the screen correctly. Here is how a
 | **Floyd-Steinberg** | ![Floyd](samples/dither_floyd.png) | Smoother gradients, traditional look. |
 | **No Dithering** | ![None](samples/dither_none.png) | Pure Black & White. Best for text. |
 | **2-bit Grayscale** | ![2-bit](samples/mode_2bit.png) | 4 levels of gray. Highest quality. |
-
-## Specifications
-
-- **Device:** XTEink X4.
-- **Screen Size:** 480×800 pixels.
-- **Format:** Vertical scan, columns Right-to-Left (XTCH).
