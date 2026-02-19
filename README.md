@@ -80,15 +80,15 @@ python cbz2xtc.py --2bit
 python image2xth.py input.png
 ```
 ### web2xtc.py
--for mobile Continuous portrait scrolling.
+- for mobile Continuous portrait scrolling.
 ```bash
 python web2xtc.py 'https://example.com/' --viewport mobile
 ```
--for mobile Continuous portrait scrolling with 1st page hyperlinks as TOC chapters.
+- for mobile Continuous portrait scrolling with 1st page hyperlinks as TOC chapters.
 ```bash
 python web2xtc.py 'https://example.com/' --viewport mobile --dynamic --parallel-links
 ```
--for mobile Continuous portrait scrolling with 1st page hyperlinks as TOC chapters and with cookies for websites like forums and social media.
+- for mobile Continuous portrait scrolling with 1st page hyperlinks as TOC chapters and with cookies for websites like forums and social media.
 ```bash
 python web2xtc.py 'https://example.com/' --viewport mobile --dynamic --parallel-links --cookies cookie.txt
 ```
