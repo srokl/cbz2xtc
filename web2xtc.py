@@ -40,6 +40,7 @@ TARGET_HEIGHT = 800
 # Global configuration (defaults)
 XTC_MODE = "1bit"        # "1bit" or "2bit"
 DITHER_ALGO = "atkinson"    # "floyd", "ordered", "rasterize", "none", "atkinson"
+DOWNSCALE_FILTER = Image.Resampling.BICUBIC # Default downscaling filter
 GAMMA_VALUE = 1.0        # Gamma correction value (1.0 = neutral)
 INVERT_COLORS = False    # Invert colors (White <-> Black)
 VIEWPORT = "desktop"     # desktop or mobile
@@ -58,6 +59,15 @@ DITHER_MAP = {
     'rasterize': Image.Dither.RASTERIZE,
     'none': Image.Dither.NONE,
     'atkinson': 'atkinson' # Custom implementation
+}
+
+# Downscaling options mapping
+DOWNSCALE_MAP = {
+    'bicubic': Image.Resampling.BICUBIC,
+    'bilinear': Image.Resampling.BILINEAR,
+    'box': Image.Resampling.BOX,
+    'lanczos': Image.Resampling.LANCZOS,
+    'nearest': Image.Resampling.NEAREST
 }
 
 
@@ -164,7 +174,7 @@ def dither_atkinson(img, levels):
 def png_to_xtg_bytes(img: Image.Image, force_size=(480, 800), threshold=128):
     """Convert PIL image to XTG bytes (1-bit monochrome)."""
     if img.size != force_size:
-        img = img.resize(force_size, Image.Resampling.BILINEAR)
+        img = img.resize(force_size, DOWNSCALE_FILTER)
 
     # Ensure 1-bit mode efficiently
     if img.mode != '1':
@@ -197,7 +207,7 @@ def png_to_xth_bytes(img: Image.Image, force_size=(480, 800)):
     - LUT: White=0(00), Light=1(01), Dark=2(10), Black=3(11)
     """
     if img.size != force_size:
-        img = img.resize(force_size, Image.Resampling.BILINEAR)
+        img = img.resize(force_size, DOWNSCALE_FILTER)
 
     # Use numpy for fast bit manipulation
     arr = np.array(img.convert('L'))
@@ -674,7 +684,7 @@ def save_with_padding(img, output_path, *, padcolor=255):
     new_width = int(img_width * scale)
     new_height = int(img_height * scale)
     
-    img_resized = img.resize((new_width, new_height), Image.Resampling.BICUBIC)
+    img_resized = img.resize((new_width, new_height), DOWNSCALE_FILTER)
     
     # Create background (default padcolor is white)
     result = Image.new('L', (TARGET_WIDTH, TARGET_HEIGHT), color=padcolor)
@@ -814,7 +824,7 @@ def preprocess_for_manhwa(img_data, page_num):
         w, h = img.size
         scale = TARGET_WIDTH / w
         new_h = int(h * scale)
-        img = img.resize((TARGET_WIDTH, new_h), Image.Resampling.BILINEAR)
+        img = img.resize((TARGET_WIDTH, new_h), DOWNSCALE_FILTER)
         
         return img
     except Exception as e:
@@ -1326,6 +1336,7 @@ def main():
         print("\nUsage:")
         print("  web2xtc <url>                     # Process URL")
         print("  web2xtc <url> --viewport mobile   # Use mobile viewport (enables Manhwa mode)")
+        print("  web2xtc <url> --downscale bilinear # Use bilinear downscaling")
         print("  web2xtc <url> --cookies cookies.txt # Load Netscape cookies")
         print("\nDithering Algorithms:")
         print("  atkinson   - Atkinson (Default, sharp shading)")
@@ -1333,8 +1344,13 @@ def main():
         print("  ordered    - Ordered/Bayer (Grid pattern)")
         print("  rasterize  - Halftone style")
         print("  none       - Pure threshold")
+        print("\nDownscaling Algorithms:")
+        print("  bicubic    - Bicubic (Default, sharpest)")
+        print("  bilinear   - Bilinear (Smoother)")
+        print("  box        - Box (Pixel averaging)")
         print("\nOptions:")
         print("  --no-dither   Same as --dither none")
+        print("  --downscale   Select downscaling algorithm (bicubic, bilinear, box, lanczos, nearest)")
         print("  --2bit        Output 2-bit grayscale XTCH files instead of 1-bit XTC.")
         print("                (Dithering works with 2-bit mode too)")
         print("  --viewport <type>   Set viewport: 'desktop' (1280x800, default) or 'mobile' (iPhone 13 Pro)")
@@ -1380,13 +1396,27 @@ def main():
     global START_PAGE, STOP_PAGE, SAMPLE_SET, SAMPLE_PAGES
     global DESIRED_V_OVERLAP_SEGMENTS, SET_H_OVERLAP_SEGMENTS, MINIMUM_V_OVERLAP_PERCENT, SET_H_OVERLAP_PERCENT
     global MAX_SPLIT_WIDTH, PADDING_COLOR, LANDSCAPE_RTL, MANHWA
-    global XTC_MODE, DITHER_ALGO, GAMMA_VALUE, INVERT_COLORS, VIEWPORT, COOKIES_FILE, DYNAMIC_MODE, PARALLEL_LINKS, WEBSITE_MODE
+    global XTC_MODE, DITHER_ALGO, DOWNSCALE_FILTER, GAMMA_VALUE, INVERT_COLORS, VIEWPORT, COOKIES_FILE, DYNAMIC_MODE, PARALLEL_LINKS, WEBSITE_MODE
 
     clean_temp = "--clean" in sys.argv
     INVERT_COLORS = "--invert" in sys.argv
     LANDSCAPE_RTL = "--landscape-rtl" in sys.argv
     DYNAMIC_MODE = "--dynamic" in sys.argv
     PARALLEL_LINKS = "--parallel-links" in sys.argv
+
+    if "--downscale" in sys.argv:
+        try:
+            idx = sys.argv.index("--downscale")
+            if idx + 1 < len(sys.argv) and not sys.argv[idx+1].startswith("--"):
+                val = sys.argv[idx + 1].lower()
+                if val in DOWNSCALE_MAP:
+                    DOWNSCALE_FILTER = DOWNSCALE_MAP[val]
+                else:
+                    print(f"Warning: Unknown downscale filter '{val}', using default 'bicubic'")
+            else:
+                print("Warning: --downscale flag missing value, using default")
+        except IndexError:
+            print("Warning: --downscale flag missing value, using default")
     
     input_arg = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else ""
     
@@ -1492,6 +1522,14 @@ def main():
     print(f"Input: {input_list[0]}")
     print(f"Viewport: {VIEWPORT.upper()}")
     print(f"Mode: {XTC_MODE}")
+
+    downscale_name = "BICUBIC"
+    for k, v in DOWNSCALE_MAP.items():
+        if v == DOWNSCALE_FILTER:
+            downscale_name = k.upper()
+            break
+    print(f"Downscaling: {downscale_name}")
+
     if MANHWA: print("Manhwa Mode: ENABLED")
 
     with ThreadPoolExecutor(max_workers=1) as executor:

@@ -65,32 +65,32 @@ Open your terminal (Command Prompt on Windows, Terminal on macOS/Linux) and run:
 The default is xtc 1-bit.
 - for 2-bit manga
 ```bash
-python cbz2xtc.py --2bit --landscape-rtl --sideways-overviews
+python cbz2xtc.py --2bit --landscape-rtl --sideways-overviews --downscale bicubic
 ```
 - for manhwa
 ```bash
-python cbz2xtc.py --manhwa
+python cbz2xtc.py --manhwa --downscale bicubic
 ```
 - for pdf
 ```bash
-python cbz2xtc.py --2bit
+python cbz2xtc.py --2bit --downscale bicubic
 ```
 ### cbz2xth.py
 ```bash
-python image2xth.py input.png
+python image2xth.py input.png --downscale bicubic
 ```
 ### web2xtc.py
 - for mobile Continuous portrait scrolling.
 ```bash
-python web2xtc.py 'https://example.com/' --viewport mobile
+python web2xtc.py 'https://example.com/' --viewport mobile --downscale bicubic
 ```
 - for mobile Continuous portrait scrolling with 1st page hyperlinks as TOC chapters.
 ```bash
-python web2xtc.py 'https://example.com/' --viewport mobile --dynamic --parallel-links
+python web2xtc.py 'https://example.com/' --viewport mobile --dynamic --parallel-links --downscale bicubic
 ```
 - for mobile Continuous portrait scrolling with 1st page hyperlinks as TOC chapters and with cookies for websites like forums and social media.
 ```bash
-python web2xtc.py 'https://example.com/' --viewport mobile --dynamic --parallel-links --cookies cookie.txt
+python web2xtc.py 'https://example.com/' --viewport mobile --dynamic --parallel-links --cookies cookie.txt --downscale bicubic
 ```
 ### video2xtc.py
 ```bash
@@ -134,6 +134,7 @@ Converts a single image to 1-bit BMP format (perfect for fast-loading background
 | Option | Effect |
 | :--- | :--- |
 | `--2bit` | Use 4-level grayscale (higher quality). |
+| `--downscale bicubic` | Downscaling filter: bicubic (default), bilinear, box. |
 | `--manhwa` | Use 75% overlap for long-strip webtoons (cbz/web only). |
 | `--landscape-rtl` | Process wide pages from Right-to-Left (for Japanese manga). |
 | `--include-overviews` | Add an upright full-page preview before segments. |

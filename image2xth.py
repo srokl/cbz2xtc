@@ -37,6 +37,16 @@ except ImportError:
 
 # Global configuration (defaults)
 DITHER_ALGO = "atkinson" # "atkinson", "floyd", "none"
+DOWNSCALE_FILTER = Image.Resampling.BICUBIC # Default downscaling filter
+
+# Downscaling options mapping
+DOWNSCALE_MAP = {
+    'bicubic': Image.Resampling.BICUBIC,
+    'bilinear': Image.Resampling.BILINEAR,
+    'box': Image.Resampling.BOX,
+    'lanczos': Image.Resampling.LANCZOS,
+    'nearest': Image.Resampling.NEAREST
+}
 
 # Configuration
 TARGET_WIDTH = 480
@@ -88,7 +98,7 @@ def convert_to_xth(input_path, output_path, dither_algo='atkinson', gamma=1.0, i
         img_width, img_height = img.size
         
         if mode == 'fill':
-            img_resized = img.resize((TARGET_WIDTH, TARGET_HEIGHT), Image.Resampling.BICUBIC)
+            img_resized = img.resize((TARGET_WIDTH, TARGET_HEIGHT), DOWNSCALE_FILTER)
             result = img_resized
         elif mode == 'crop':
             # Center crop
@@ -99,14 +109,14 @@ def convert_to_xth(input_path, output_path, dither_algo='atkinson', gamma=1.0, i
             # Scale to fill and crop overflow
             scale = max(TARGET_WIDTH / img_width, TARGET_HEIGHT / img_height)
             new_width, new_height = int(img_width * scale), int(img_height * scale)
-            img_resized = img.resize((new_width, new_height), Image.Resampling.BICUBIC)
+            img_resized = img.resize((new_width, new_height), DOWNSCALE_FILTER)
             left = (new_width - TARGET_WIDTH) // 2
             top = (new_height - TARGET_HEIGHT) // 2
             result = img_resized.crop((left, top, left + TARGET_WIDTH, top + TARGET_HEIGHT))
         else: # letterbox
             scale = min(TARGET_WIDTH / img_width, TARGET_HEIGHT / img_height)
             new_width, new_height = int(img_width * scale), int(img_height * scale)
-            img_resized = img.resize((new_width, new_height), Image.Resampling.BICUBIC)
+            img_resized = img.resize((new_width, new_height), DOWNSCALE_FILTER)
             result = Image.new('L', (TARGET_WIDTH, TARGET_HEIGHT), color=pad_color)
             x, y = (TARGET_WIDTH - new_width) // 2, (TARGET_HEIGHT - new_height) // 2
             result.paste(img_resized, (x, y))
@@ -177,10 +187,14 @@ def main():
         print("  image2xth image.jpg --mode letterbox     # Scale to fit")
         print("  image2xth image.jpg --pad black          # Black padding")
         print("  image2xth image.jpg --dither floyd       # Floyd-Steinberg")
+        print("  image2xth image.jpg --downscale box      # Box downscaling")
         print("  image2xth image.jpg --gamma 0.7          # Brighten")
-        print("  image2xth folder/                        # Convert all images")
+        print("  image2xth folder/                        # Convert all images in folder")
+        print("\nDownscaling Algorithms:")
+        print("  bicubic (default), bilinear, box, lanczos, nearest")
         return 0
     
+    global DOWNSCALE_FILTER
     dither_algo = DITHER_ALGO
     gamma = 1.0
     invert = "--invert" in args
@@ -190,6 +204,12 @@ def main():
     if '--dither' in args:
         idx = args.index('--dither')
         if idx + 1 < len(args): dither_algo = args[idx+1].lower()
+    if '--downscale' in args:
+        idx = args.index('--downscale')
+        if idx + 1 < len(args):
+            val = args[idx+1].lower()
+            if val in DOWNSCALE_MAP:
+                DOWNSCALE_FILTER = DOWNSCALE_MAP[val]
     if '--gamma' in args:
         idx = args.index('--gamma')
         if idx + 1 < len(args): gamma = float(args[idx+1])
@@ -210,7 +230,7 @@ def main():
             skip = False
             continue
         if arg.startswith('--'):
-            if arg in ['--dither', '--gamma', '--mode', '--pad']:
+            if arg in ['--dither', '--downscale', '--gamma', '--mode', '--pad']:
                 skip = True
             continue
         input_path = Path(arg)

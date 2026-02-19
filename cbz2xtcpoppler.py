@@ -42,6 +42,7 @@ TARGET_HEIGHT = 800
 # Global configuration (defaults)
 XTC_MODE = "1bit"        # "1bit" or "2bit"
 DITHER_ALGO = "atkinson"    # "floyd", "ordered", "rasterize", "none", "atkinson"
+DOWNSCALE_FILTER = Image.Resampling.BICUBIC # Default downscaling filter
 GAMMA_VALUE = 1.0        # Gamma correction value (1.0 = neutral)
 INVERT_COLORS = False    # Invert colors (White <-> Black)
 
@@ -52,6 +53,15 @@ DITHER_MAP = {
     'rasterize': Image.Dither.RASTERIZE,
     'none': Image.Dither.NONE,
     'atkinson': 'atkinson' # Custom implementation
+}
+
+# Downscaling options mapping
+DOWNSCALE_MAP = {
+    'bicubic': Image.Resampling.BICUBIC,
+    'bilinear': Image.Resampling.BILINEAR,
+    'box': Image.Resampling.BOX,
+    'lanczos': Image.Resampling.LANCZOS,
+    'nearest': Image.Resampling.NEAREST
 }
 
 
@@ -131,7 +141,7 @@ def dither_atkinson(img, levels):
 def png_to_xtg_bytes(img: Image.Image, force_size=(480, 800), threshold=128):
     """Convert PIL image to XTG bytes (1-bit monochrome)."""
     if img.size != force_size:
-        img = img.resize(force_size, Image.Resampling.BILINEAR)
+        img = img.resize(force_size, DOWNSCALE_FILTER)
 
     # Ensure 1-bit mode efficiently
     if img.mode != '1':
@@ -164,7 +174,7 @@ def png_to_xth_bytes(img: Image.Image, force_size=(480, 800)):
     - LUT: White=0(00), Light=1(01), Dark=2(10), Black=3(11)
     """
     if img.size != force_size:
-        img = img.resize(force_size, Image.Resampling.BILINEAR)
+        img = img.resize(force_size, DOWNSCALE_FILTER)
 
     # Use numpy for fast bit manipulation
     arr = np.array(img.convert('L'))
@@ -681,7 +691,7 @@ def save_with_padding(img, output_path, *, padcolor=255):
     new_width = int(img_width * scale)
     new_height = int(img_height * scale)
     
-    img_resized = img.resize((new_width, new_height), Image.Resampling.BICUBIC)
+    img_resized = img.resize((new_width, new_height), DOWNSCALE_FILTER)
     
     # Create background (default padcolor is white)
     result = Image.new('L', (TARGET_WIDTH, TARGET_HEIGHT), color=padcolor)
@@ -821,7 +831,7 @@ def preprocess_for_manhwa(img_data, page_num):
         w, h = img.size
         scale = TARGET_WIDTH / w
         new_h = int(h * scale)
-        img = img.resize((TARGET_WIDTH, new_h), Image.Resampling.BILINEAR)
+        img = img.resize((TARGET_WIDTH, new_h), DOWNSCALE_FILTER)
         
         return img
     except Exception as e:
@@ -1166,6 +1176,7 @@ def main():
         print("  cbz2xtc /path/to/folder           # Process specific folder")
         print("  cbz2xtc --no-dither               # Disable dithering (threshold)")
         print("  cbz2xtc --dither <algo>           # Select dithering: floyd, ordered, rasterize, none")
+        print("  cbz2xtc --downscale <algo>        # Select downscaling: bicubic, bilinear, box")
         print("  cbz2xtc --2bit                    # Use 2-bit (4-level) grayscale mode (outputs .xtch)")
         print("  cbz2xtc --gamma <float>           # Adjust brightness (0.5 = brighter, 1.0 = normal)")
         print("  cbz2xtc --invert                  # Invert colors (White <-> Black)")
@@ -1176,8 +1187,13 @@ def main():
         print("  ordered    - Ordered/Bayer (Grid pattern)")
         print("  rasterize  - Halftone style")
         print("  none       - Pure threshold")
+        print("\nDownscaling Algorithms:")
+        print("  bicubic    - Bicubic (Default, sharpest)")
+        print("  bilinear   - Bilinear (Smoother)")
+        print("  box        - Box (Pixel averaging)")
         print("\nOptions:")
         print("  --no-dither   Same as --dither none")
+        print("  --downscale   Select downscaling algorithm (bicubic, bilinear, box, lanczos, nearest)")
         print("  --2bit        Output 2-bit grayscale XTCH files instead of 1-bit XTC.")
         print("                (Dithering works with 2-bit mode too)")
         print("\n  --overlap     Split into 3 overlapping screen-filling pieces instead")
@@ -1251,6 +1267,7 @@ def main():
     # New globals
     global XTC_MODE
     global DITHER_ALGO
+    global DOWNSCALE_FILTER
     global GAMMA_VALUE
     global INVERT_COLORS
 
@@ -1266,6 +1283,20 @@ def main():
             GAMMA_VALUE = float(sys.argv[idx + 1])
         except (ValueError, IndexError):
             print("Warning: Invalid value for --gamma, using default 1.0")
+
+    if "--downscale" in sys.argv:
+        try:
+            idx = sys.argv.index("--downscale")
+            if idx + 1 < len(sys.argv) and not sys.argv[idx+1].startswith("--"):
+                val = sys.argv[idx + 1].lower()
+                if val in DOWNSCALE_MAP:
+                    DOWNSCALE_FILTER = DOWNSCALE_MAP[val]
+                else:
+                    print(f"Warning: Unknown downscale filter '{val}', using default 'bicubic'")
+            else:
+                print("Warning: --downscale flag missing value, using default")
+        except IndexError:
+            print("Warning: --downscale flag missing value, using default")
     
     # Handle dithering args
     if "--no-dither" in sys.argv:
@@ -1324,8 +1355,8 @@ def main():
     while i < len(sys.argv):
         arg = sys.argv[i]
         # Skip value args we already handled or boolean args
-        if arg in ["--dither", "--2bit", "--no-dither", "--clean", "--overlap", "--split-all", "--pad-black", "--include-overviews", "--sideways-overviews", "--gamma", "--invert"]:
-            if arg == "--dither" or arg == "--gamma":
+        if arg in ["--dither", "--2bit", "--no-dither", "--clean", "--overlap", "--split-all", "--pad-black", "--include-overviews", "--sideways-overviews", "--gamma", "--invert", "--downscale"]:
+            if arg == "--dither" or arg == "--gamma" or arg == "--downscale":
                  i += 1 # skip value
             # booleans are already handled
         elif arg == "--split-spreads":
@@ -1403,6 +1434,14 @@ def main():
     print(f"\nInput: {input_path.absolute()}")
     print(f"Mode: {XTC_MODE} ({'4-level grayscale' if XTC_MODE=='2bit' else '1-bit B&W'})")
     print(f"Dithering: {DITHER_ALGO.upper()}")
+
+    downscale_name = "BICUBIC"
+    for k, v in DOWNSCALE_MAP.items():
+        if v == DOWNSCALE_FILTER:
+            downscale_name = k.upper()
+            break
+    print(f"Downscaling: {downscale_name}")
+
     if GAMMA_VALUE != 1.0:
         print(f"Gamma: {GAMMA_VALUE}")
     if INVERT_COLORS:
