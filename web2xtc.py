@@ -1195,6 +1195,7 @@ def convert_png_folder_to_xtc(png_folder, output_file, source_file=None):
     if not png_files:
         print(f"  ✗ No PNG files found in {png_folder}")
         return False
+    total_files = len(png_files)
 
     # Build mapping from original page number to first and last segment index
     page_ranges = {}
@@ -1206,7 +1207,6 @@ def convert_png_folder_to_xtc(png_folder, output_file, source_file=None):
                 mapping = json.load(f)
             # Reconstruct page_ranges from mapping
             sorted_pages = sorted([int(k) for k in mapping.keys()])
-            total_files = len(png_files)
             
             for i, p in enumerate(sorted_pages):
                 entry_data = mapping[str(p)]
@@ -1261,10 +1261,19 @@ def convert_png_folder_to_xtc(png_folder, output_file, source_file=None):
     # Create TOC entry for every original page
     for orig_page in sorted(page_ranges.keys()):
         entry = page_ranges[orig_page]
+        
+        # Apply +3 page offset for chapters (User request) - Mobile Viewport Only
+        if VIEWPORT == "mobile":
+            start_val = min(entry['start'] + 3, total_files)
+            end_val = min(entry['end'] + 3, total_files)
+        else:
+            start_val = entry['start']
+            end_val = entry['end']
+        
         toc.append({
             "title": entry.get('title', f"Page {orig_page}"),
-            "page": entry['start'],
-            "end": entry['end']
+            "page": start_val,
+            "end": end_val
         })
 
     try:

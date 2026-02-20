@@ -263,6 +263,26 @@ def get_cbz_bookmarks(cbz_path):
     return bookmarks
 
 
+def get_pdf_bookmarks(pdf_path):
+    """
+    Extract TOC from PDF using PyMuPDF (fitz).
+    Returns: Dict mapping 1-indexed page number to bookmark title.
+    """
+    bookmarks = {}
+    try:
+        import fitz
+        doc = fitz.open(pdf_path)
+        toc = doc.get_toc()
+        for level, title, page in toc:
+            # Page in get_toc() is 1-indexed.
+            if page not in bookmarks:
+                bookmarks[page] = title
+        doc.close()
+    except Exception as e:
+        print(f"  Warning: Could not extract bookmarks from PDF: {e}")
+    return bookmarks
+
+
 def build_xtc_internal(png_paths, out_path, mode="1bit", toc=None):
     """
     Build XTC/XTCH file internally.
@@ -1115,8 +1135,12 @@ def convert_png_folder_to_xtc(png_folder, output_file, source_file=None):
     # Generate TOC
     toc = []
     page_titles = {}
-    if source_file and source_file.suffix.lower() == '.cbz':
-        page_titles = get_cbz_bookmarks(source_file)
+    if source_file:
+        ext = source_file.suffix.lower()
+        if ext == '.cbz':
+            page_titles = get_cbz_bookmarks(source_file)
+        elif ext == '.pdf':
+            page_titles = get_pdf_bookmarks(source_file)
     
     # Create TOC entry for every original page
     for orig_page in sorted(page_ranges.keys()):
