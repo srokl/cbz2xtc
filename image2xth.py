@@ -22,7 +22,7 @@ Orientation:
     portrait (default), landscape (90), landscape-flipped (-90), portrait-flipped (180)
 
 Dithering:
-    atkinson (default), stucki, ostromoukhov, floyd, none
+    stucki (default), atkinson, ostromoukhov, floyd, none
 """
 
 import os
@@ -40,7 +40,7 @@ except ImportError:
         return func
 
 # Global configuration (defaults)
-DITHER_ALGO = "atkinson" # "atkinson", "floyd", "none"
+DITHER_ALGO = "stucki" # "atkinson", "floyd", "none"
 DOWNSCALE_FILTER = Image.Resampling.BICUBIC # Default downscaling filter
 
 # Downscaling options mapping

@@ -39,7 +39,7 @@ TARGET_HEIGHT = 800
 
 # Global configuration (defaults)
 XTC_MODE = "1bit"        # "1bit" or "2bit"
-DITHER_ALGO = "atkinson"    # "floyd", "ordered", "rasterize", "none", "atkinson"
+DITHER_ALGO = "stucki"    # "floyd", "ordered", "rasterize", "none", "atkinson", "stucki"
 DOWNSCALE_FILTER = Image.Resampling.BICUBIC # Default downscaling filter
 GAMMA_VALUE = 1.0        # Gamma correction value (1.0 = neutral)
 INVERT_COLORS = False    # Invert colors (White <-> Black)
@@ -1467,8 +1467,8 @@ def main():
         print("  web2xtc <url> --downscale bilinear # Use bilinear downscaling")
         print("  web2xtc <url> --cookies cookies.txt # Load Netscape cookies")
         print("\nDithering Algorithms:")
-        print("  atkinson   - Atkinson (Default, sharp shading)")
-        print("  stucki     - Stucki (High quality, sharpest)")
+        print("  stucki     - Stucki (Default, sharpest)")
+        print("  atkinson   - Atkinson (Sharp shading)")
         print("  ostromoukhov - Ostromoukhov (Blue noise, smooth)")
         print("  floyd      - Floyd-Steinberg (Smooth gradients)")
         print("  ordered    - Ordered/Bayer (Grid pattern)")

@@ -31,7 +31,7 @@ TARGET_HEIGHT = 800
 
 # Global configuration (defaults)
 XTC_MODE = "1bit"
-DITHER_ALGO = "atkinson"
+DITHER_ALGO = "stucki"
 GAMMA_VALUE = 1.0
 INVERT_COLORS = False
 FPS_VALUE = 1.0
@@ -419,7 +419,7 @@ def main():
         print("Options:")
         print("  --fps <float>    Frames per second (default 1.0)")
         print("  --2bit           Use 2-bit grayscale")
-        print("  --dither <algo>  atkinson, stucki, ostromoukhov, floyd, ordered, none")
+        print("  --dither <algo>  stucki (default), atkinson, ostromoukhov, floyd, ordered, none")
         print("  --gamma <float>  Brightness (default 1.0)")
         print("  --invert         Invert colors")
         print("  --clean          Delete temp files")
