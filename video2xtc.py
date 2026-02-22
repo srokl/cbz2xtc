@@ -41,8 +41,59 @@ DITHER_MAP = {
     'ordered': Image.Dither.ORDERED,
     'rasterize': Image.Dither.RASTERIZE,
     'none': Image.Dither.NONE,
-    'atkinson': 'atkinson'
+    'atkinson': 'atkinson',
+    'stucki': 'stucki'
 }
+
+@njit
+def _stucki_loop(data, w, h, stride, is_2bit):
+    for y in range(h):
+        row_start = y * stride
+        for x in range(1, w + 1):
+            idx = row_start + x
+            old_val = data[idx]
+            if is_2bit:
+                if old_val < 42: new_val = 0
+                elif old_val < 127: new_val = 85
+                elif old_val < 212: new_val = 170
+                else: new_val = 255
+            else:
+                new_val = 0 if old_val < 128 else 255
+            data[idx] = new_val
+            err = old_val - new_val
+            if err != 0:
+                # Row 1
+                if x + 1 < w: data[idx + 1] += (err * 8) // 42
+                if x + 2 < w: data[idx + 2] += (err * 4) // 42
+                # Row 2
+                idx_n = idx + stride
+                if idx_n < len(data):
+                    if x - 2 > 0: data[idx_n - 2] += (err * 2) // 42
+                    if x - 1 > 0: data[idx_n - 1] += (err * 4) // 42
+                    data[idx_n] += (err * 8) // 42
+                    if x + 1 < w: data[idx_n + 1] += (err * 4) // 42
+                    if x + 2 < w: data[idx_n + 2] += (err * 2) // 42
+                # Row 3
+                idx_n2 = idx + (stride * 2)
+                if idx_n2 < len(data):
+                    if x - 2 > 0: data[idx_n2 - 2] += (err * 1) // 42
+                    if x - 1 > 0: data[idx_n2 - 1] += (err * 2) // 42
+                    data[idx_n2] += (err * 4) // 42
+                    if x + 1 < w: data[idx_n2 + 1] += (err * 2) // 42
+                    if x + 2 < w: data[idx_n2 + 2] += (err * 1) // 42
+
+def dither_stucki(img, levels):
+    w, h = img.size
+    stride = w + 3
+    buff = np.zeros((h + 3, stride), dtype=np.int16)
+    img_arr = np.array(img, dtype=np.int16)
+    buff[0:h, 1:w+1] = img_arr
+    data = buff.flatten()
+    is_2bit = (len(levels) > 2)
+    _stucki_loop(data, w, h, stride, is_2bit)
+    res_arr = data.reshape((h + 3, stride))
+    final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
+    return Image.fromarray(final_arr, 'L')
 
 @njit
 def _atkinson_loop(data, w, h, stride, is_2bit):
@@ -215,6 +266,8 @@ def optimize_frame(img, output_path):
             result = result.point(lut)
         elif DITHER_ALGO == 'atkinson':
             result = dither_atkinson(result, levels=[0, 85, 170, 255])
+        elif DITHER_ALGO == 'stucki':
+            result = dither_stucki(result, levels=[0, 85, 170, 255])
         else:
             pal_img = Image.new("P", (1, 1))
             pal_img.putpalette([0,0,0, 85,85,85, 170,170,170, 255,255,255] + [0,0,0]*252)
@@ -224,6 +277,9 @@ def optimize_frame(img, output_path):
     else:
         if DITHER_ALGO == 'atkinson':
             result = dither_atkinson(result, levels=[0, 255])
+            result = result.convert('1', dither=Image.Dither.NONE)
+        elif DITHER_ALGO == 'stucki':
+            result = dither_stucki(result, levels=[0, 255])
             result = result.convert('1', dither=Image.Dither.NONE)
         else:
             dither_mode = DITHER_MAP.get(DITHER_ALGO, Image.Dither.FLOYDSTEINBERG)
@@ -298,7 +354,7 @@ def main():
         print("Options:")
         print("  --fps <float>    Frames per second (default 1.0)")
         print("  --2bit           Use 2-bit grayscale")
-        print("  --dither <algo>  atkinson, floyd, ordered, none")
+        print("  --dither <algo>  atkinson, stucki, floyd, ordered, none")
         print("  --gamma <float>  Brightness (default 1.0)")
         print("  --invert         Invert colors")
         print("  --clean          Delete temp files")

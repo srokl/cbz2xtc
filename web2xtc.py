@@ -58,7 +58,8 @@ DITHER_MAP = {
     'ordered': Image.Dither.ORDERED,
     'rasterize': Image.Dither.RASTERIZE,
     'none': Image.Dither.NONE,
-    'atkinson': 'atkinson' # Custom implementation
+    'atkinson': 'atkinson', # Custom implementation
+    'stucki': 'stucki' # Custom implementation
 }
 
 # Downscaling options mapping
@@ -97,6 +98,63 @@ def parse_netscape_cookies(cookie_file):
         print(f"Warning: Failed to parse cookie file: {e}")
     return cookies
 
+
+@njit
+def _stucki_loop(data, w, h, stride, is_2bit):
+    for y in range(h):
+        row_start = y * stride
+        for x in range(1, w + 1):
+            idx = row_start + x
+            old_val = data[idx]
+            
+            # Thresholding / Quantization
+            if is_2bit:
+                if old_val < 42: new_val = 0
+                elif old_val < 127: new_val = 85
+                elif old_val < 212: new_val = 170
+                else: new_val = 255
+            else:
+                new_val = 0 if old_val < 128 else 255
+            
+            data[idx] = new_val
+            err = old_val - new_val
+            
+            if err != 0:
+                # Row 1
+                if x + 1 < w: data[idx + 1] += (err * 8) // 42
+                if x + 2 < w: data[idx + 2] += (err * 4) // 42
+                # Row 2
+                idx_n = idx + stride
+                if idx_n < len(data):
+                    if x - 2 > 0: data[idx_n - 2] += (err * 2) // 42
+                    if x - 1 > 0: data[idx_n - 1] += (err * 4) // 42
+                    data[idx_n] += (err * 8) // 42
+                    if x + 1 < w: data[idx_n + 1] += (err * 4) // 42
+                    if x + 2 < w: data[idx_n + 2] += (err * 2) // 42
+                # Row 3
+                idx_n2 = idx + (stride * 2)
+                if idx_n2 < len(data):
+                    if x - 2 > 0: data[idx_n2 - 2] += (err * 1) // 42
+                    if x - 1 > 0: data[idx_n2 - 1] += (err * 2) // 42
+                    data[idx_n2] += (err * 4) // 42
+                    if x + 1 < w: data[idx_n2 + 1] += (err * 2) // 42
+                    if x + 2 < w: data[idx_n2 + 2] += (err * 1) // 42
+
+def dither_stucki(img, levels):
+    """
+    Apply Stucki dithering to a grayscale PIL image.
+    """
+    w, h = img.size
+    stride = w + 3
+    buff = np.zeros((h + 3, stride), dtype=np.int16)
+    img_arr = np.array(img, dtype=np.int16)
+    buff[0:h, 1:w+1] = img_arr
+    data = buff.flatten()
+    is_2bit = (len(levels) > 2)
+    _stucki_loop(data, w, h, stride, is_2bit)
+    res_arr = data.reshape((h + 3, stride))
+    final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
+    return Image.fromarray(final_arr, 'L')
 
 @njit
 def _atkinson_loop(data, w, h, stride, is_2bit):
@@ -731,6 +789,9 @@ def save_with_padding(img, output_path, *, padcolor=255):
             # result is 'L' mode here.
             result = dither_atkinson(result, levels=[0, 85, 170, 255])
             
+        elif DITHER_ALGO == 'stucki':
+            result = dither_stucki(result, levels=[0, 85, 170, 255])
+            
         else:
             # Use Floyd-Steinberg Dithering (Best for photos/gradients)
             # Create a 4-color palette image
@@ -751,6 +812,9 @@ def save_with_padding(img, output_path, *, padcolor=255):
             # Convert to 1-bit (threshold 128) just to be safe/compliant with '1' mode expectation?
             # Actually, dither_atkinson returns L with values 0 or 255.
             # We can convert to '1' with dither=NONE to pack it.
+            result = result.convert('1', dither=Image.Dither.NONE)
+        elif DITHER_ALGO == 'stucki':
+            result = dither_stucki(result, levels=[0, 255])
             result = result.convert('1', dither=Image.Dither.NONE)
         else:
             dither_mode = DITHER_MAP.get(DITHER_ALGO, Image.Dither.FLOYDSTEINBERG)
@@ -1349,6 +1413,7 @@ def main():
         print("  web2xtc <url> --cookies cookies.txt # Load Netscape cookies")
         print("\nDithering Algorithms:")
         print("  atkinson   - Atkinson (Default, sharp shading)")
+        print("  stucki     - Stucki (High quality, sharpest)")
         print("  floyd      - Floyd-Steinberg (Smooth gradients)")
         print("  ordered    - Ordered/Bayer (Grid pattern)")
         print("  rasterize  - Halftone style")

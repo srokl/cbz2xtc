@@ -18,7 +18,7 @@ Modes:
     crop            - Center crop 480x800 from original without scaling
 
 Dithering:
-    atkinson (default), floyd, none
+    atkinson (default), stucki, floyd, none
 """
 
 import os
@@ -52,6 +52,49 @@ DOWNSCALE_MAP = {
 TARGET_WIDTH = 480
 TARGET_HEIGHT = 800
 SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff', '.tif'}
+
+@njit
+def _stucki_loop(data, w, h, stride):
+    for y in range(h):
+        row_start = y * stride
+        for x in range(1, w + 1):
+            idx = row_start + x
+            old_val = data[idx]
+            if old_val < 42: new_val = 0
+            elif old_val < 127: new_val = 85
+            elif old_val < 212: new_val = 170
+            else: new_val = 255
+            data[idx] = new_val
+            err = old_val - new_val
+            if err != 0:
+                if x + 1 < w: data[idx + 1] += (err * 8) // 42
+                if x + 2 < w: data[idx + 2] += (err * 4) // 42
+                idx_n = idx + stride
+                if idx_n < len(data):
+                    if x - 2 > 0: data[idx_n - 2] += (err * 2) // 42
+                    if x - 1 > 0: data[idx_n - 1] += (err * 4) // 42
+                    data[idx_n] += (err * 8) // 42
+                    if x + 1 < w: data[idx_n + 1] += (err * 4) // 42
+                    if x + 2 < w: data[idx_n + 2] += (err * 2) // 42
+                idx_n2 = idx + (stride * 2)
+                if idx_n2 < len(data):
+                    if x - 2 > 0: data[idx_n2 - 2] += (err * 1) // 42
+                    if x - 1 > 0: data[idx_n2 - 1] += (err * 2) // 42
+                    data[idx_n2] += (err * 4) // 42
+                    if x + 1 < w: data[idx_n2 + 1] += (err * 2) // 42
+                    if x + 2 < w: data[idx_n2 + 2] += (err * 1) // 42
+
+def dither_stucki(img):
+    w, h = img.size
+    stride = w + 3
+    buff = np.zeros((h + 3, stride), dtype=np.int16)
+    img_arr = np.array(img, dtype=np.int16)
+    buff[0:h, 1:w+1] = img_arr
+    data = buff.flatten()
+    _stucki_loop(data, w, h, stride)
+    res_arr = data.reshape((h + 3, stride))
+    final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
+    return Image.fromarray(final_arr, 'L')
 
 @njit
 def _atkinson_loop(data, w, h, stride):
@@ -130,6 +173,8 @@ def convert_to_xth(input_path, output_path, dither_algo='atkinson', gamma=1.0, i
 
         if dither_algo == 'atkinson':
             result = dither_atkinson(result)
+        elif dither_algo == 'stucki':
+            result = dither_stucki(result)
         elif dither_algo == 'floyd':
             pal_img = Image.new("P", (1, 1))
             pal_img.putpalette([0,0,0, 85,85,85, 170,170,170, 255,255,255] + [0,0,0]*252)
