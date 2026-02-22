@@ -42,8 +42,68 @@ DITHER_MAP = {
     'rasterize': Image.Dither.RASTERIZE,
     'none': Image.Dither.NONE,
     'atkinson': 'atkinson',
-    'stucki': 'stucki'
+    'stucki': 'stucki',
+    'ostromoukhov': 'ostromoukhov'
 }
+
+@njit
+def _ostromoukhov_loop(data, w, h, stride, is_2bit):
+    for y in range(h):
+        row_start = y * stride
+        for x in range(1, w + 1):
+            idx = row_start + x
+            old_val = data[idx]
+            if is_2bit:
+                if old_val < 42: new_val = 0
+                elif old_val < 127: new_val = 85
+                elif old_val < 212: new_val = 170
+                else: new_val = 255
+            else:
+                new_val = 0 if old_val < 128 else 255
+            data[idx] = new_val
+            err = old_val - new_val
+            if err != 0:
+                # Variable coefficients based on input intensity
+                # Simplified 3-point piecewise linear interpolation
+                # 0/255: [0.7, 0.2, 0.1]
+                # 128:   [0.3, 0.4, 0.3]
+                
+                v = max(0, min(255, old_val))
+                if v <= 128:
+                    t = v / 128.0
+                    d1 = 0.7 * (1 - t) + 0.3 * t
+                    d2 = 0.2 * (1 - t) + 0.4 * t
+                    d3 = 0.1 * (1 - t) + 0.3 * t
+                else:
+                    t = (v - 128) / 127.0
+                    d1 = 0.3 * (1 - t) + 0.7 * t
+                    d2 = 0.4 * (1 - t) + 0.2 * t
+                    d3 = 0.3 * (1 - t) + 0.1 * t
+                
+                # Distribute error
+                # d1: Right (x+1)
+                # d2: Down-Left (x-1, y+1)
+                # d3: Down (x, y+1)
+                
+                if x + 1 < w: data[idx + 1] += int(err * d1)
+                
+                idx_n = idx + stride
+                if idx_n < len(data):
+                    if x - 1 > 0: data[idx_n - 1] += int(err * d2)
+                    data[idx_n] += int(err * d3)
+
+def dither_ostromoukhov(img, levels):
+    w, h = img.size
+    stride = w + 3
+    buff = np.zeros((h + 3, stride), dtype=np.int16)
+    img_arr = np.array(img, dtype=np.int16)
+    buff[0:h, 1:w+1] = img_arr
+    data = buff.flatten()
+    is_2bit = (len(levels) > 2)
+    _ostromoukhov_loop(data, w, h, stride, is_2bit)
+    res_arr = data.reshape((h + 3, stride))
+    final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
+    return Image.fromarray(final_arr, 'L')
 
 @njit
 def _stucki_loop(data, w, h, stride, is_2bit):
@@ -268,6 +328,8 @@ def optimize_frame(img, output_path):
             result = dither_atkinson(result, levels=[0, 85, 170, 255])
         elif DITHER_ALGO == 'stucki':
             result = dither_stucki(result, levels=[0, 85, 170, 255])
+        elif DITHER_ALGO == 'ostromoukhov':
+            result = dither_ostromoukhov(result, levels=[0, 85, 170, 255])
         else:
             pal_img = Image.new("P", (1, 1))
             pal_img.putpalette([0,0,0, 85,85,85, 170,170,170, 255,255,255] + [0,0,0]*252)
@@ -280,6 +342,9 @@ def optimize_frame(img, output_path):
             result = result.convert('1', dither=Image.Dither.NONE)
         elif DITHER_ALGO == 'stucki':
             result = dither_stucki(result, levels=[0, 255])
+            result = result.convert('1', dither=Image.Dither.NONE)
+        elif DITHER_ALGO == 'ostromoukhov':
+            result = dither_ostromoukhov(result, levels=[0, 255])
             result = result.convert('1', dither=Image.Dither.NONE)
         else:
             dither_mode = DITHER_MAP.get(DITHER_ALGO, Image.Dither.FLOYDSTEINBERG)
@@ -354,7 +419,7 @@ def main():
         print("Options:")
         print("  --fps <float>    Frames per second (default 1.0)")
         print("  --2bit           Use 2-bit grayscale")
-        print("  --dither <algo>  atkinson, stucki, floyd, ordered, none")
+        print("  --dither <algo>  atkinson, stucki, ostromoukhov, floyd, ordered, none")
         print("  --gamma <float>  Brightness (default 1.0)")
         print("  --invert         Invert colors")
         print("  --clean          Delete temp files")

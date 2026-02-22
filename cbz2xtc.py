@@ -53,7 +53,8 @@ DITHER_MAP = {
     'rasterize': Image.Dither.RASTERIZE,
     'none': Image.Dither.NONE,
     'atkinson': 'atkinson', # Custom implementation
-    'stucki': 'stucki' # Custom implementation
+    'stucki': 'stucki', # Custom implementation
+    'ostromoukhov': 'ostromoukhov' # Custom implementation
 }
 
 # Downscaling options mapping
@@ -65,6 +66,54 @@ DOWNSCALE_MAP = {
     'nearest': Image.Resampling.NEAREST
 }
 
+
+@njit
+def _ostromoukhov_loop(data, w, h, stride, is_2bit):
+    for y in range(h):
+        row_start = y * stride
+        for x in range(1, w + 1):
+            idx = row_start + x
+            old_val = data[idx]
+            if is_2bit:
+                if old_val < 42: new_val = 0
+                elif old_val < 127: new_val = 85
+                elif old_val < 212: new_val = 170
+                else: new_val = 255
+            else:
+                new_val = 0 if old_val < 128 else 255
+            data[idx] = new_val
+            err = old_val - new_val
+            if err != 0:
+                v = max(0, min(255, old_val))
+                if v <= 128:
+                    t = v / 128.0
+                    d1 = 0.7 * (1 - t) + 0.3 * t
+                    d2 = 0.2 * (1 - t) + 0.4 * t
+                    d3 = 0.1 * (1 - t) + 0.3 * t
+                else:
+                    t = (v - 128) / 127.0
+                    d1 = 0.3 * (1 - t) + 0.7 * t
+                    d2 = 0.4 * (1 - t) + 0.2 * t
+                    d3 = 0.3 * (1 - t) + 0.1 * t
+                
+                if x + 1 < w: data[idx + 1] += int(err * d1)
+                idx_n = idx + stride
+                if idx_n < len(data):
+                    if x - 1 > 0: data[idx_n - 1] += int(err * d2)
+                    data[idx_n] += int(err * d3)
+
+def dither_ostromoukhov(img, levels):
+    w, h = img.size
+    stride = w + 3
+    buff = np.zeros((h + 3, stride), dtype=np.int16)
+    img_arr = np.array(img, dtype=np.int16)
+    buff[0:h, 1:w+1] = img_arr
+    data = buff.flatten()
+    is_2bit = (len(levels) > 2)
+    _ostromoukhov_loop(data, w, h, stride, is_2bit)
+    res_arr = data.reshape((h + 3, stride))
+    final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
+    return Image.fromarray(final_arr, 'L')
 
 @njit
 def _stucki_loop(data, w, h, stride, is_2bit):
@@ -614,6 +663,43 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
         # Handle landscape images (Spreads)
         is_landscape = width >= height
 
+        # Override is_landscape if user specified orientation
+        if ORIENTATION == 'landscape' or ORIENTATION == 'landscape-flipped':
+            is_landscape = True
+        elif ORIENTATION == 'portrait' or ORIENTATION == 'portrait-flipped':
+            is_landscape = False # Treat even wide images as portrait if forced? No, usually refers to output.
+            # But the user logic "is_landscape" determines if we rotate -90.
+            # If ORIENTATION is set, we should probably follow it.
+        
+        # Let's refine:
+        # Default behavior (portrait): 
+        #   If image is Wide (Spread) -> Rotate -90 (to make Tall).
+        #   If image is Tall (Page) -> Keep Tall.
+        
+        # New behavior:
+        #   If 'landscape': Rotate 90 (Clockwise).
+        #   If 'landscape-flipped': Rotate -90 (Counter-Clockwise).
+        #   If 'portrait-flipped': Rotate 180.
+        #   If 'portrait': Standard behavior (Auto-rotate spreads).
+        
+        angle = 0
+        if ORIENTATION == 'landscape': angle = 90
+        elif ORIENTATION == 'landscape-flipped': angle = -90
+        elif ORIENTATION == 'portrait-flipped': angle = 180
+        
+        if angle != 0:
+             img = img.rotate(angle, expand=True)
+             width, height = img.size
+             is_landscape = width >= height # Re-evaluate after rotation
+        
+        # Standard auto-rotation for spreads (if still in standard portrait mode)
+        if ORIENTATION == 'portrait' and is_landscape:
+             # Rotate landscape pages -90 first so they can be treated as tall portrait pages
+             # This is the legacy behavior for spreads
+             img = img.rotate(-90, expand=True)
+             width, height = img.size
+             is_landscape = False # Now it's tall
+
         # We split most pages that are vertical. 
         should_this_split = True if not is_solid else False
         
@@ -645,11 +731,8 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                     output_page = output_path_base.parent / f"{page_num:04d}{suffix}_0_overview.png"
                     save_with_padding(page_view, output_page, padcolor=PADDING_COLOR)
 
-        if is_landscape:
-            # Rotate landscape pages -90 first so they can be treated as tall portrait pages
-            img = img.rotate(-90, expand=True)
-            width, height = img.size
-
+        # Legacy rotation block removed (handled above by ORIENTATION logic)
+        
         half_height = height // 2
         total_size = 0
 
@@ -861,6 +944,9 @@ def save_with_padding(img, output_path, *, padcolor=255):
         elif DITHER_ALGO == 'stucki':
             result = dither_stucki(result, levels=[0, 85, 170, 255])
             
+        elif DITHER_ALGO == 'ostromoukhov':
+            result = dither_ostromoukhov(result, levels=[0, 85, 170, 255])
+            
         else:
             # Use Floyd-Steinberg Dithering (Best for photos/gradients)
             # Create a 4-color palette image
@@ -884,6 +970,9 @@ def save_with_padding(img, output_path, *, padcolor=255):
             result = result.convert('1', dither=Image.Dither.NONE)
         elif DITHER_ALGO == 'stucki':
             result = dither_stucki(result, levels=[0, 255])
+            result = result.convert('1', dither=Image.Dither.NONE)
+        elif DITHER_ALGO == 'ostromoukhov':
+            result = dither_ostromoukhov(result, levels=[0, 255])
             result = result.convert('1', dither=Image.Dither.NONE)
         else:
             dither_mode = DITHER_MAP.get(DITHER_ALGO, Image.Dither.FLOYDSTEINBERG)
@@ -1289,9 +1378,11 @@ def main():
         print("  cbz2xtc --gamma <float>           # Adjust brightness (0.5 = brighter, 1.0 = normal)")
         print("  cbz2xtc --invert                  # Invert colors (White <-> Black)")
         print("  cbz2xtc --clean                   # Auto-delete temp PNG files")
+        print("  cbz2xtc --orientation <mode>      # Set orientation: portrait, landscape, landscape-flipped, portrait-flipped")
         print("\nDithering Algorithms:")
         print("  atkinson   - Atkinson (Default, sharp shading)")
         print("  stucki     - Stucki (High quality, sharpest)")
+        print("  ostromoukhov - Ostromoukhov (Blue noise, smooth)")
         print("  floyd      - Floyd-Steinberg (Smooth gradients)")
         print("  ordered    - Ordered/Bayer (Grid pattern)")
         print("  rasterize  - Halftone style")
@@ -1372,6 +1463,7 @@ def main():
     global PADDING_COLOR
     global LANDSCAPE_RTL
     global MANHWA
+    global ORIENTATION # New
     
     # New globals
     global XTC_MODE
@@ -1385,6 +1477,18 @@ def main():
     INVERT_COLORS = "--invert" in sys.argv
     LANDSCAPE_RTL = "--landscape-rtl" in sys.argv
     MANHWA = "--manhwa" in sys.argv
+    ORIENTATION = "portrait"
+
+    if "--orientation" in sys.argv:
+        try:
+            idx = sys.argv.index("--orientation")
+            val = sys.argv[idx + 1].lower()
+            if val in ["portrait", "landscape", "landscape-flipped", "portrait-flipped"]:
+                ORIENTATION = val
+            else:
+                print(f"Warning: Invalid orientation '{val}', using default 'portrait'")
+        except (ValueError, IndexError):
+            print("Warning: Invalid orientation, using default 'portrait'")
     
     if "--gamma" in sys.argv:
         try:

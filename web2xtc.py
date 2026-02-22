@@ -59,7 +59,8 @@ DITHER_MAP = {
     'rasterize': Image.Dither.RASTERIZE,
     'none': Image.Dither.NONE,
     'atkinson': 'atkinson', # Custom implementation
-    'stucki': 'stucki' # Custom implementation
+    'stucki': 'stucki', # Custom implementation
+    'ostromoukhov': 'ostromoukhov' # Custom implementation
 }
 
 # Downscaling options mapping
@@ -98,6 +99,54 @@ def parse_netscape_cookies(cookie_file):
         print(f"Warning: Failed to parse cookie file: {e}")
     return cookies
 
+
+@njit
+def _ostromoukhov_loop(data, w, h, stride, is_2bit):
+    for y in range(h):
+        row_start = y * stride
+        for x in range(1, w + 1):
+            idx = row_start + x
+            old_val = data[idx]
+            if is_2bit:
+                if old_val < 42: new_val = 0
+                elif old_val < 127: new_val = 85
+                elif old_val < 212: new_val = 170
+                else: new_val = 255
+            else:
+                new_val = 0 if old_val < 128 else 255
+            data[idx] = new_val
+            err = old_val - new_val
+            if err != 0:
+                v = max(0, min(255, old_val))
+                if v <= 128:
+                    t = v / 128.0
+                    d1 = 0.7 * (1 - t) + 0.3 * t
+                    d2 = 0.2 * (1 - t) + 0.4 * t
+                    d3 = 0.1 * (1 - t) + 0.3 * t
+                else:
+                    t = (v - 128) / 127.0
+                    d1 = 0.3 * (1 - t) + 0.7 * t
+                    d2 = 0.4 * (1 - t) + 0.2 * t
+                    d3 = 0.3 * (1 - t) + 0.1 * t
+                
+                if x + 1 < w: data[idx + 1] += int(err * d1)
+                idx_n = idx + stride
+                if idx_n < len(data):
+                    if x - 1 > 0: data[idx_n - 1] += int(err * d2)
+                    data[idx_n] += int(err * d3)
+
+def dither_ostromoukhov(img, levels):
+    w, h = img.size
+    stride = w + 3
+    buff = np.zeros((h + 3, stride), dtype=np.int16)
+    img_arr = np.array(img, dtype=np.int16)
+    buff[0:h, 1:w+1] = img_arr
+    data = buff.flatten()
+    is_2bit = (len(levels) > 2)
+    _ostromoukhov_loop(data, w, h, stride, is_2bit)
+    res_arr = data.reshape((h + 3, stride))
+    final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
+    return Image.fromarray(final_arr, 'L')
 
 @njit
 def _stucki_loop(data, w, h, stride, is_2bit):
@@ -792,6 +841,9 @@ def save_with_padding(img, output_path, *, padcolor=255):
         elif DITHER_ALGO == 'stucki':
             result = dither_stucki(result, levels=[0, 85, 170, 255])
             
+        elif DITHER_ALGO == 'ostromoukhov':
+            result = dither_ostromoukhov(result, levels=[0, 85, 170, 255])
+            
         else:
             # Use Floyd-Steinberg Dithering (Best for photos/gradients)
             # Create a 4-color palette image
@@ -815,6 +867,9 @@ def save_with_padding(img, output_path, *, padcolor=255):
             result = result.convert('1', dither=Image.Dither.NONE)
         elif DITHER_ALGO == 'stucki':
             result = dither_stucki(result, levels=[0, 255])
+            result = result.convert('1', dither=Image.Dither.NONE)
+        elif DITHER_ALGO == 'ostromoukhov':
+            result = dither_ostromoukhov(result, levels=[0, 255])
             result = result.convert('1', dither=Image.Dither.NONE)
         else:
             dither_mode = DITHER_MAP.get(DITHER_ALGO, Image.Dither.FLOYDSTEINBERG)
@@ -1414,6 +1469,7 @@ def main():
         print("\nDithering Algorithms:")
         print("  atkinson   - Atkinson (Default, sharp shading)")
         print("  stucki     - Stucki (High quality, sharpest)")
+        print("  ostromoukhov - Ostromoukhov (Blue noise, smooth)")
         print("  floyd      - Floyd-Steinberg (Smooth gradients)")
         print("  ordered    - Ordered/Bayer (Grid pattern)")
         print("  rasterize  - Halftone style")

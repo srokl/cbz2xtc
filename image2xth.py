@@ -9,6 +9,7 @@ Usage:
     image2xth image.jpg --pad black           # Black background for letterbox
     image2xth image.jpg --dither floyd        # Floyd-Steinberg dithering
     image2xth image.jpg --gamma 0.7           # Adjust brightness
+    image2xth image.jpg --orientation landscape # Rotate 90 degrees
     image2xth folder/                         # Convert all images in folder
 
 Modes:
@@ -17,8 +18,11 @@ Modes:
     fill            - Stretch to fill 480x800 (ignores aspect ratio)
     crop            - Center crop 480x800 from original without scaling
 
+Orientation:
+    portrait (default), landscape (90), landscape-flipped (-90), portrait-flipped (180)
+
 Dithering:
-    atkinson (default), stucki, floyd, none
+    atkinson (default), stucki, ostromoukhov, floyd, none
 """
 
 import os
@@ -52,6 +56,50 @@ DOWNSCALE_MAP = {
 TARGET_WIDTH = 480
 TARGET_HEIGHT = 800
 SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff', '.tif'}
+
+@njit
+def _ostromoukhov_loop(data, w, h, stride):
+    for y in range(h):
+        row_start = y * stride
+        for x in range(1, w + 1):
+            idx = row_start + x
+            old_val = data[idx]
+            if old_val < 42: new_val = 0
+            elif old_val < 127: new_val = 85
+            elif old_val < 212: new_val = 170
+            else: new_val = 255
+            data[idx] = new_val
+            err = old_val - new_val
+            if err != 0:
+                v = max(0, min(255, old_val))
+                if v <= 128:
+                    t = v / 128.0
+                    d1 = 0.7 * (1 - t) + 0.3 * t
+                    d2 = 0.2 * (1 - t) + 0.4 * t
+                    d3 = 0.1 * (1 - t) + 0.3 * t
+                else:
+                    t = (v - 128) / 127.0
+                    d1 = 0.3 * (1 - t) + 0.7 * t
+                    d2 = 0.4 * (1 - t) + 0.2 * t
+                    d3 = 0.3 * (1 - t) + 0.1 * t
+                
+                if x + 1 < w: data[idx + 1] += int(err * d1)
+                idx_n = idx + stride
+                if idx_n < len(data):
+                    if x - 1 > 0: data[idx_n - 1] += int(err * d2)
+                    data[idx_n] += int(err * d3)
+
+def dither_ostromoukhov(img):
+    w, h = img.size
+    stride = w + 3
+    buff = np.zeros((h + 3, stride), dtype=np.int16)
+    img_arr = np.array(img, dtype=np.int16)
+    buff[0:h, 1:w+1] = img_arr
+    data = buff.flatten()
+    _ostromoukhov_loop(data, w, h, stride)
+    res_arr = data.reshape((h + 3, stride))
+    final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
+    return Image.fromarray(final_arr, 'L')
 
 @njit
 def _stucki_loop(data, w, h, stride):
@@ -132,11 +180,20 @@ def dither_atkinson(img):
     final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
     return Image.fromarray(final_arr, 'L')
 
-def convert_to_xth(input_path, output_path, dither_algo='atkinson', gamma=1.0, invert=False, mode='cover', pad_color=255):
+def convert_to_xth(input_path, output_path, dither_algo='atkinson', gamma=1.0, invert=False, mode='cover', pad_color=255, orientation='portrait'):
     try:
         img = Image.open(input_path)
         if img.mode != 'L':
             img = img.convert('L')
+        
+        # Handle orientation (rotate BEFORE any resizing)
+        if orientation == 'landscape':
+            img = img.rotate(90, expand=True) # Clockwise 90
+        elif orientation == 'landscape-flipped':
+            img = img.rotate(-90, expand=True) # Counter-clockwise 90
+        elif orientation == 'portrait-flipped':
+            img = img.rotate(180, expand=True)
+        # 'portrait' does nothing
         
         img_width, img_height = img.size
         
@@ -175,6 +232,8 @@ def convert_to_xth(input_path, output_path, dither_algo='atkinson', gamma=1.0, i
             result = dither_atkinson(result)
         elif dither_algo == 'stucki':
             result = dither_stucki(result)
+        elif dither_algo == 'ostromoukhov':
+            result = dither_ostromoukhov(result)
         elif dither_algo == 'floyd':
             pal_img = Image.new("P", (1, 1))
             pal_img.putpalette([0,0,0, 85,85,85, 170,170,170, 255,255,255] + [0,0,0]*252)
@@ -245,10 +304,14 @@ def main():
     invert = "--invert" in args
     mode = 'cover'
     pad_color = 255 # White
+    orientation = 'portrait'
     
     if '--dither' in args:
         idx = args.index('--dither')
         if idx + 1 < len(args): dither_algo = args[idx+1].lower()
+    if '--orientation' in args:
+        idx = args.index('--orientation')
+        if idx + 1 < len(args): orientation = args[idx+1].lower()
     if '--downscale' in args:
         idx = args.index('--downscale')
         if idx + 1 < len(args):
@@ -286,11 +349,11 @@ def main():
         return 1
     
     if input_path.is_file():
-        convert_to_xth(input_path, input_path.with_suffix('.xth'), dither_algo, gamma, invert, mode, pad_color)
+        convert_to_xth(input_path, input_path.with_suffix('.xth'), dither_algo, gamma, invert, mode, pad_color, orientation)
     else:
         for ext in SUPPORTED_FORMATS:
             for f in sorted(input_path.glob(f"*{ext}")):
-                convert_to_xth(f, f.with_suffix('.xth'), dither_algo, gamma, invert, mode, pad_color)
+                convert_to_xth(f, f.with_suffix('.xth'), dither_algo, gamma, invert, mode, pad_color, orientation)
 
 if __name__ == "__main__":
     main()

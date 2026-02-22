@@ -125,37 +125,69 @@ Converts video files (MP4, MKV, AVI, etc.) to XTC/XTCH format.
 Converts a single image (like a wallpaper) to XTCH (2-bit grayscale) format.
 - Supports **Cover**, **Letterbox**, and **Fill** modes.
 
-### image2bw.py
-Converts a single image to 1-bit BMP format (perfect for fast-loading backgrounds).
+### Dithering Options
+Available for all tools (`--dither <algo>`):
+| Algorithm | Description |
+| :--- | :--- |
+| `atkinson` | (Default) Sharp error diffusion, good contrast preservation. |
+| `stucki` | (Experimental) High-quality error diffusion, sharpest details. |
+| `ostromoukhov` | (Experimental) Variable-coefficient error diffusion, smooth "blue noise" look. |
+| `floyd` | Floyd-Steinberg. Standard smooth gradients. |
+| `ordered` | Bayer matrix ordered dithering (grid pattern). |
+| `rasterize` | Halftone style (cbz/web only). |
+| `none` | Pure threshold (no dithering). Best for crisp text. |
+
+### Orientation Options
+Available for `image2xth.py` and `cbz2xtc.py` (`--orientation <mode>`):
+| Mode | Description |
+| :--- | :--- |
+| `portrait` | (Default) Standard upright orientation. Auto-rotates wide spreads (-90°). |
+| `landscape` | Rotates image **90° clockwise** (top becomes right). |
+| `landscape-flipped` | Rotates image **90° counter-clockwise** (-90°, top becomes left). |
+| `portrait-flipped` | Rotates image **180°** (upside down). |
 
 ## Options Reference
 
-### General Options (cbz2xtc, web2xtc, video2xtc)
+### General Options (cbz2xtc, web2xtc, video2xtc, image2xth)
 | Option | Effect |
 | :--- | :--- |
-| `--2bit` | Use 4-level grayscale (higher quality). |
-| `--downscale bicubic` | Downscaling filter: bicubic (default), bilinear, box. |
-| `--manhwa` | Use 75% overlap for long-strip webtoons (cbz/web only). |
+| `--2bit` | Use 4-level grayscale (higher quality, larger file size). |
+| `--downscale bicubic` | Downscaling filter: bicubic (default), bilinear, box, lanczos, nearest. |
+| `--dither <algo>` | Choose dithering algorithm (see above). |
+| `--gamma 0.7` | Brighten the image (use values like 0.5 to 0.9). |
+| `--invert` | Invert colors (White <-> Black). |
+| `--clean` | Delete temporary files after the conversion is done. |
+
+### Tool-Specific Options
+
+#### cbz2xtc.py (Manga/PDF)
+| Option | Effect |
+| :--- | :--- |
+| `--manhwa` | Use 75% vertical overlap for long-strip webtoons. |
 | `--landscape-rtl` | Process wide pages from Right-to-Left (for Japanese manga). |
 | `--include-overviews` | Add an upright full-page preview before segments. |
 | `--sideways-overviews` | Add a rotated full-page preview (-90 degrees). |
-| `--gamma 0.7` | Brighten the image (use values like 0.5 to 0.9). |
-| `--clean` | Delete temporary files after the conversion is done. |
+| `--orientation <mode>` | Force rotation mode (see above). |
 
-### Video Options (video2xtc.py only)
+#### video2xtc.py (Video)
 | Option | Effect |
 | :--- | :--- |
 | `--fps 1.0` | Frames per second to extract (Default: 1.0). |
-| `--invert` | Invert colors (White <-> Black). |
-| `--dither atkinson` | Dithering: atkinson, floyd, ordered, none. |
 
-### Web Options (web2xtc.py only)
+#### web2xtc.py (Web)
 | Option | Effect |
 | :--- | :--- |
 | `--dynamic` | Expands menus and crawls 1st-page links (chapters). |
 | `--parallel-links` | Crawls sub-links in parallel (faster). |
 | `--viewport mobile` | Use mobile layout (iPhone 13 Pro). Default is desktop. |
 | `--cookies file.txt` | Load cookies from a Netscape-formatted file. |
+
+#### image2xth.py (Single Image)
+| Option | Effect |
+| :--- | :--- |
+| `--mode <mode>` | Scaling mode: `cover` (fill & crop), `letterbox` (fit & pad), `fill` (stretch), `crop` (no scale). |
+| `--pad black` | Use black background instead of white for letterboxing. |
+| `--orientation <mode>` | Force rotation mode (see above). |
 
 ## Visual Samples
 
