@@ -247,7 +247,10 @@ def dither_atkinson(img, levels):
     final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
     return Image.fromarray(final_arr, 'L')
 
-def png_to_xtg_bytes(img: Image.Image, force_size=(480, 800), threshold=128):
+def png_to_xtg_bytes(img: Image.Image, force_size=None, threshold=128):
+    if force_size is None:
+        force_size = (TARGET_WIDTH, TARGET_HEIGHT)
+        
     if img.size != force_size:
         img = img.resize(force_size, Image.Resampling.BILINEAR)
     if img.mode != '1':
@@ -258,7 +261,10 @@ def png_to_xtg_bytes(img: Image.Image, force_size=(480, 800), threshold=128):
     header = struct.pack("<4sHHBBI8s", b"XTG\x00", force_size[0], force_size[1], 0, 0, data_size, md5digest)
     return header + data
 
-def png_to_xth_bytes(img: Image.Image, force_size=(480, 800)):
+def png_to_xth_bytes(img: Image.Image, force_size=None):
+    if force_size is None:
+        force_size = (TARGET_WIDTH, TARGET_HEIGHT)
+
     if img.size != force_size:
         img = img.resize(force_size, Image.Resampling.BILINEAR)
     arr = np.array(img.convert('L'))

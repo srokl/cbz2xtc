@@ -290,8 +290,11 @@ def dither_atkinson(img, levels):
     return Image.fromarray(final_arr, 'L')
 
 
-def png_to_xtg_bytes(img: Image.Image, force_size=(480, 800), threshold=128):
+def png_to_xtg_bytes(img: Image.Image, force_size=None, threshold=128):
     """Convert PIL image to XTG bytes (1-bit monochrome)."""
+    if force_size is None:
+        force_size = (TARGET_WIDTH, TARGET_HEIGHT)
+
     if img.size != force_size:
         img = img.resize(force_size, DOWNSCALE_FILTER)
 
@@ -317,7 +320,7 @@ def png_to_xtg_bytes(img: Image.Image, force_size=(480, 800), threshold=128):
     return header + data
 
 
-def png_to_xth_bytes(img: Image.Image, force_size=(480, 800)):
+def png_to_xth_bytes(img: Image.Image, force_size=None):
     """
     Convert PIL image to XTH bytes (2-bit grayscale, planar).
     Follows 'cli/encoder.js' from epub-to-xtc-converter:
@@ -325,6 +328,9 @@ def png_to_xth_bytes(img: Image.Image, force_size=(480, 800)):
     - 2 bit planes
     - LUT: White=0(00), Light=1(01), Dark=2(10), Black=3(11)
     """
+    if force_size is None:
+        force_size = (TARGET_WIDTH, TARGET_HEIGHT)
+
     if img.size != force_size:
         img = img.resize(force_size, DOWNSCALE_FILTER)
 
@@ -614,8 +620,8 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                 width, height = uncropped_img.size
                 text_position = (width//8,height//2)
                 box_position = ((width//8)-30, (height//2), (width//8)+496, (height//2)+120)
-                width_proportion = width / 800
-                overlapping_third_height = 480 * width_proportion // 1
+                width_proportion = width / TARGET_HEIGHT
+                overlapping_third_height = TARGET_WIDTH * width_proportion // 1
                 shiftdown_to_overlap = overlapping_third_height - (overlapping_third_height * 3 - height) // 2
                 contrast_set = 0
                 while contrast_set < 9:

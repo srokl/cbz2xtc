@@ -333,8 +333,11 @@ def dither_atkinson(img, levels):
     return Image.fromarray(final_arr, 'L')
 
 
-def png_to_xtg_bytes(img: Image.Image, force_size=(480, 800), threshold=128):
+def png_to_xtg_bytes(img: Image.Image, force_size=None, threshold=128):
     """Convert PIL image to XTG bytes (1-bit monochrome)."""
+    if force_size is None:
+        force_size = (TARGET_WIDTH, TARGET_HEIGHT)
+
     if img.size != force_size:
         img = img.resize(force_size, DOWNSCALE_FILTER)
 
@@ -360,7 +363,7 @@ def png_to_xtg_bytes(img: Image.Image, force_size=(480, 800), threshold=128):
     return header + data
 
 
-def png_to_xth_bytes(img: Image.Image, force_size=(480, 800)):
+def png_to_xth_bytes(img: Image.Image, force_size=None):
     """
     Convert PIL image to XTH bytes (2-bit grayscale, planar).
     Follows 'cli/encoder.js' from epub-to-xtc-converter:
@@ -368,6 +371,9 @@ def png_to_xth_bytes(img: Image.Image, force_size=(480, 800)):
     - 2 bit planes
     - LUT: White=0(00), Light=1(01), Dark=2(10), Black=3(11)
     """
+    if force_size is None:
+        force_size = (TARGET_WIDTH, TARGET_HEIGHT)
+
     if img.size != force_size:
         img = img.resize(force_size, DOWNSCALE_FILTER)
 
@@ -1136,8 +1142,8 @@ def capture_page_worker(args):
         with sync_playwright() as p:
             if viewport == "mobile":
                 device = p.devices['iPhone 13 Pro']
-                # Override viewport to match XTEink X4 (480x800) for 1:1 pixel mapping
-                device['viewport'] = {'width': 480, 'height': 800}
+                # Override viewport to match XTEink X4/X3 pixel mapping
+                device['viewport'] = {'width': TARGET_WIDTH, 'height': TARGET_HEIGHT}
                 # Disable Retina scaling (DPR=1) for 9x speedup and native 480px width
                 device['device_scale_factor'] = 1
                 # Keep the Mobile User Agent from the device descriptor
@@ -1194,7 +1200,7 @@ def extract_url_to_png(url, temp_dir):
         with sync_playwright() as p:
             if VIEWPORT == "mobile":
                 device = p.devices['iPhone 13 Pro']
-                device['viewport'] = {'width': 480, 'height': 800}
+                device['viewport'] = {'width': TARGET_WIDTH, 'height': TARGET_HEIGHT}
                 device['device_scale_factor'] = 1
                 browser = p.chromium.launch()
                 context = browser.new_context(**device)
@@ -1306,9 +1312,10 @@ def extract_url_to_png(url, temp_dir):
                     # Sequential Reuse (Re-open browser)
                     print(f"  Capturing {total} sub-pages (Sequential)...")
                     with sync_playwright() as p:
-                        if VIEWPORT == "mobile":
-                            device = p.devices['iPhone 13 Pro']
-                            device['viewport'] = {'width': 480, 'height': 800}
+                                    if VIEWPORT == "mobile":
+                                        device = p.devices['iPhone 13 Pro']
+                                        device['viewport'] = {'width': TARGET_WIDTH, 'height': TARGET_HEIGHT}
+                        
                             device['device_scale_factor'] = 1
                             browser = p.chromium.launch()
                             context = browser.new_context(**device)
