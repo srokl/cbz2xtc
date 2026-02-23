@@ -34,12 +34,8 @@ Image.MAX_IMAGE_PIXELS = None
 
 
 # Configuration
-DEVICE_DIMENSIONS = {
-    'X4': (480, 800),
-    'X3': (528, 792)
-}
-
-TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS['X4']
+TARGET_WIDTH = 480
+TARGET_HEIGHT = 800
 
 # Global configuration (defaults)
 XTC_MODE = "1bit"        # "1bit" or "2bit"
@@ -333,11 +329,8 @@ def dither_atkinson(img, levels):
     return Image.fromarray(final_arr, 'L')
 
 
-def png_to_xtg_bytes(img: Image.Image, force_size=None, threshold=128):
+def png_to_xtg_bytes(img: Image.Image, force_size=(480, 800), threshold=128):
     """Convert PIL image to XTG bytes (1-bit monochrome)."""
-    if force_size is None:
-        force_size = (TARGET_WIDTH, TARGET_HEIGHT)
-
     if img.size != force_size:
         img = img.resize(force_size, DOWNSCALE_FILTER)
 
@@ -363,7 +356,7 @@ def png_to_xtg_bytes(img: Image.Image, force_size=None, threshold=128):
     return header + data
 
 
-def png_to_xth_bytes(img: Image.Image, force_size=None):
+def png_to_xth_bytes(img: Image.Image, force_size=(480, 800)):
     """
     Convert PIL image to XTH bytes (2-bit grayscale, planar).
     Follows 'cli/encoder.js' from epub-to-xtc-converter:
@@ -371,9 +364,6 @@ def png_to_xth_bytes(img: Image.Image, force_size=None):
     - 2 bit planes
     - LUT: White=0(00), Light=1(01), Dark=2(10), Black=3(11)
     """
-    if force_size is None:
-        force_size = (TARGET_WIDTH, TARGET_HEIGHT)
-
     if img.size != force_size:
         img = img.resize(force_size, DOWNSCALE_FILTER)
 
@@ -1142,8 +1132,8 @@ def capture_page_worker(args):
         with sync_playwright() as p:
             if viewport == "mobile":
                 device = p.devices['iPhone 13 Pro']
-                # Override viewport to match XTEink X4/X3 pixel mapping
-                device['viewport'] = {'width': TARGET_WIDTH, 'height': TARGET_HEIGHT}
+                # Override viewport to match XTEink X4 (480x800) for 1:1 pixel mapping
+                device['viewport'] = {'width': 480, 'height': 800}
                 # Disable Retina scaling (DPR=1) for 9x speedup and native 480px width
                 device['device_scale_factor'] = 1
                 # Keep the Mobile User Agent from the device descriptor
@@ -1200,7 +1190,7 @@ def extract_url_to_png(url, temp_dir):
         with sync_playwright() as p:
             if VIEWPORT == "mobile":
                 device = p.devices['iPhone 13 Pro']
-                device['viewport'] = {'width': TARGET_WIDTH, 'height': TARGET_HEIGHT}
+                device['viewport'] = {'width': 480, 'height': 800}
                 device['device_scale_factor'] = 1
                 browser = p.chromium.launch()
                 context = browser.new_context(**device)
@@ -1312,10 +1302,9 @@ def extract_url_to_png(url, temp_dir):
                     # Sequential Reuse (Re-open browser)
                     print(f"  Capturing {total} sub-pages (Sequential)...")
                     with sync_playwright() as p:
-                                    if VIEWPORT == "mobile":
-                                        device = p.devices['iPhone 13 Pro']
-                                        device['viewport'] = {'width': TARGET_WIDTH, 'height': TARGET_HEIGHT}
-                        
+                        if VIEWPORT == "mobile":
+                            device = p.devices['iPhone 13 Pro']
+                            device['viewport'] = {'width': 480, 'height': 800}
                             device['device_scale_factor'] = 1
                             browser = p.chromium.launch()
                             context = browser.new_context(**device)
@@ -1588,6 +1577,7 @@ def main():
         print("\n  --help, -h    Show this help message")
         return 0
     
+    # Parse globals
     global OVERLAP, SPLIT_SPREADS, SPLIT_SPREADS_PAGES, SPLIT_ALL, SKIP_ON, SKIP_PAGES, ONLY_ON, ONLY_PAGES
     global DONT_SPLIT, DONT_SPLIT_PAGES, CONTRAST_BOOST, CONTRAST_VALUE, MARGIN, MARGIN_VALUE
     global INCLUDE_OVERVIEWS, SIDEWAYS_OVERVIEWS, SELECT_OVERVIEWS, SELECT_OV_PAGES
@@ -1595,21 +1585,12 @@ def main():
     global DESIRED_V_OVERLAP_SEGMENTS, SET_H_OVERLAP_SEGMENTS, MINIMUM_V_OVERLAP_PERCENT, SET_H_OVERLAP_PERCENT
     global MAX_SPLIT_WIDTH, PADDING_COLOR, LANDSCAPE_RTL, MANHWA
     global XTC_MODE, DITHER_ALGO, DOWNSCALE_FILTER, GAMMA_VALUE, INVERT_COLORS, VIEWPORT, COOKIES_FILE, DYNAMIC_MODE, PARALLEL_LINKS, WEBSITE_MODE
-    global TARGET_WIDTH, TARGET_HEIGHT
 
     clean_temp = "--clean" in sys.argv
     INVERT_COLORS = "--invert" in sys.argv
     LANDSCAPE_RTL = "--landscape-rtl" in sys.argv
     DYNAMIC_MODE = "--dynamic" in sys.argv
     PARALLEL_LINKS = "--parallel-links" in sys.argv
-
-    if "--device" in sys.argv:
-        try:
-            idx = sys.argv.index("--device")
-            dev = sys.argv[idx+1].upper()
-            if dev in DEVICE_DIMENSIONS:
-                TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS[dev]
-        except: pass
 
     if "--downscale" in sys.argv:
         try:

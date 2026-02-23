@@ -26,12 +26,8 @@ from PIL import Image, ImageOps, ImageDraw, ImageFont
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configuration
-DEVICE_DIMENSIONS = {
-    'X4': (480, 800),
-    'X3': (528, 792)
-}
-
-TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS['X4']
+TARGET_WIDTH = 480
+TARGET_HEIGHT = 800
 
 # Global configuration (defaults)
 XTC_MODE = "1bit"
@@ -47,7 +43,8 @@ DITHER_MAP = {
     'none': Image.Dither.NONE,
     'atkinson': 'atkinson',
     'stucki': 'stucki',
-    'ostromoukhov': 'ostromoukhov'
+    'ostromoukhov': 'ostromoukhov',
+    'zhoufang': 'zhoufang'
 }
 
 @njit
@@ -77,6 +74,7 @@ def _zhoufang_loop(data, w, h, stride, is_2bit):
                     data[idx_n] += int(e * 16)
                     if x + 1 < w: data[idx_n + 1] += int(e * 11)
                     if x + 2 < w: data[idx_n + 2] += int(e * 5)
+                # Row 3
                 idx_n2 = idx + (stride * 2)
                 if idx_n2 < len(data):
                     if x - 2 > 0: data[idx_n2 - 2] += int(e * 1)
@@ -247,10 +245,7 @@ def dither_atkinson(img, levels):
     final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
     return Image.fromarray(final_arr, 'L')
 
-def png_to_xtg_bytes(img: Image.Image, force_size=None, threshold=128):
-    if force_size is None:
-        force_size = (TARGET_WIDTH, TARGET_HEIGHT)
-        
+def png_to_xtg_bytes(img: Image.Image, force_size=(480, 800), threshold=128):
     if img.size != force_size:
         img = img.resize(force_size, Image.Resampling.BILINEAR)
     if img.mode != '1':
@@ -261,10 +256,7 @@ def png_to_xtg_bytes(img: Image.Image, force_size=None, threshold=128):
     header = struct.pack("<4sHHBBI8s", b"XTG\x00", force_size[0], force_size[1], 0, 0, data_size, md5digest)
     return header + data
 
-def png_to_xth_bytes(img: Image.Image, force_size=None):
-    if force_size is None:
-        force_size = (TARGET_WIDTH, TARGET_HEIGHT)
-
+def png_to_xth_bytes(img: Image.Image, force_size=(480, 800)):
     if img.size != force_size:
         img = img.resize(force_size, Image.Resampling.BILINEAR)
     arr = np.array(img.convert('L'))
@@ -488,7 +480,7 @@ def main():
         print("  --clean          Delete temp files")
         return 0
 
-    global XTC_MODE, DITHER_ALGO, GAMMA_VALUE, INVERT_COLORS, FPS_VALUE, TARGET_WIDTH, TARGET_HEIGHT
+    global XTC_MODE, DITHER_ALGO, GAMMA_VALUE, INVERT_COLORS, FPS_VALUE
     
     clean_temp = "--clean" in sys.argv
     INVERT_COLORS = "--invert" in sys.argv
@@ -507,11 +499,6 @@ def main():
             i += 1
         elif arg == "--fps":
             FPS_VALUE = float(sys.argv[i+1])
-            i += 1
-        elif arg == "--device":
-            dev = sys.argv[i+1].upper()
-            if dev in DEVICE_DIMENSIONS:
-                TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS[dev]
             i += 1
         elif not arg.startswith("--"):
             files.append(Path(arg))

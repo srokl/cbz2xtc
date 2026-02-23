@@ -36,12 +36,8 @@ import time
 
 
 # Configuration
-DEVICE_DIMENSIONS = {
-    'X4': (480, 800),
-    'X3': (528, 792)
-}
-
-TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS['X4']
+TARGET_WIDTH = 480
+TARGET_HEIGHT = 800
 
 # Global configuration (defaults)
 XTC_MODE = "1bit"        # "1bit" or "2bit"
@@ -301,11 +297,8 @@ def dither_atkinson(img, levels):
     return Image.fromarray(final_arr, 'L')
 
 
-def png_to_xtg_bytes(img: Image.Image, force_size=None, threshold=128):
+def png_to_xtg_bytes(img: Image.Image, force_size=(480, 800), threshold=128):
     """Convert PIL image to XTG bytes (1-bit monochrome)."""
-    if force_size is None:
-        force_size = (TARGET_WIDTH, TARGET_HEIGHT)
-        
     if img.size != force_size:
         img = img.resize(force_size, DOWNSCALE_FILTER)
 
@@ -331,7 +324,7 @@ def png_to_xtg_bytes(img: Image.Image, force_size=None, threshold=128):
     return header + data
 
 
-def png_to_xth_bytes(img: Image.Image, force_size=None):
+def png_to_xth_bytes(img: Image.Image, force_size=(480, 800)):
     """
     Convert PIL image to XTH bytes (2-bit grayscale, planar).
     Follows 'cli/encoder.js' from epub-to-xtc-converter:
@@ -339,9 +332,6 @@ def png_to_xth_bytes(img: Image.Image, force_size=None):
     - 2 bit planes
     - LUT: White=0(00), Light=1(01), Dark=2(10), Black=3(11)
     """
-    if force_size is None:
-        force_size = (TARGET_WIDTH, TARGET_HEIGHT)
-
     if img.size != force_size:
         img = img.resize(force_size, DOWNSCALE_FILTER)
 
@@ -630,8 +620,8 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                 width, height = uncropped_img.size
                 text_position = (width//8,height//2)
                 box_position = ((width//8)-30, (height//2), (width//8)+496, (height//2)+120)
-                width_proportion = width / TARGET_HEIGHT
-                overlapping_third_height = TARGET_WIDTH * width_proportion // 1
+                width_proportion = width / 800
+                overlapping_third_height = 480 * width_proportion // 1
                 shiftdown_to_overlap = overlapping_third_height - (overlapping_third_height * 3 - height) // 2
                 contrast_set = 0
                 while contrast_set < 9:
@@ -724,43 +714,6 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
         # Handle landscape images (Spreads)
         is_landscape = width >= height
 
-        # Override is_landscape if user specified orientation
-        if ORIENTATION == 'landscape' or ORIENTATION == 'landscape-flipped':
-            is_landscape = True
-        elif ORIENTATION == 'portrait' or ORIENTATION == 'portrait-flipped':
-            is_landscape = False # Treat even wide images as portrait if forced? No, usually refers to output.
-            # But the user logic "is_landscape" determines if we rotate -90.
-            # If ORIENTATION is set, we should probably follow it.
-        
-        # Let's refine:
-        # Default behavior (portrait): 
-        #   If image is Wide (Spread) -> Rotate -90 (to make Tall).
-        #   If image is Tall (Page) -> Keep Tall.
-        
-        # New behavior:
-        #   If 'landscape': Rotate 90 (Clockwise).
-        #   If 'landscape-flipped': Rotate -90 (Counter-Clockwise).
-        #   If 'portrait-flipped': Rotate 180.
-        #   If 'portrait': Standard behavior (Auto-rotate spreads).
-        
-        angle = 0
-        if ORIENTATION == 'landscape': angle = 90
-        elif ORIENTATION == 'landscape-flipped': angle = -90
-        elif ORIENTATION == 'portrait-flipped': angle = 180
-        
-        if angle != 0:
-             img = img.rotate(angle, expand=True)
-             width, height = img.size
-             is_landscape = width >= height # Re-evaluate after rotation
-        
-        # Standard auto-rotation for spreads (if still in standard portrait mode)
-        if ORIENTATION == 'portrait' and is_landscape:
-             # Rotate landscape pages -90 first so they can be treated as tall portrait pages
-             # This is the legacy behavior for spreads
-             img = img.rotate(-90, expand=True)
-             width, height = img.size
-             is_landscape = False # Now it's tall
-
         # We split most pages that are vertical. 
         should_this_split = True if not is_solid else False
         
@@ -792,8 +745,11 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                     output_page = output_path_base.parent / f"{page_num:04d}{suffix}_0_overview.png"
                     save_with_padding(page_view, output_page, padcolor=PADDING_COLOR)
 
-        # Legacy rotation block removed (handled above by ORIENTATION logic)
-        
+        if is_landscape:
+            # Rotate landscape pages -90 first so they can be treated as tall portrait pages
+            img = img.rotate(-90, expand=True)
+            width, height = img.size
+
         half_height = height // 2
         total_size = 0
 
@@ -1445,9 +1401,6 @@ def main():
         print("  cbz2xtc --gamma <float>           # Adjust brightness (0.5 = brighter, 1.0 = normal)")
         print("  cbz2xtc --invert                  # Invert colors (White <-> Black)")
         print("  cbz2xtc --clean                   # Auto-delete temp PNG files")
-        print("  cbz2xtc --orientation <mode>      # Set orientation: portrait, landscape, landscape-flipped, portrait-flipped")
-        print("  cbz2xtc --hsplit-count <N>        # Split page horizontally into N segments")
-        print("  cbz2xtc --device <X4|X3>          # Target device (default X4: 480x800, X3: 528x792)")
         print("\nDithering Algorithms:")
         print("  stucki     - Stucki (Default, sharpest)")
         print("  atkinson   - Atkinson (Sharp shading)")
@@ -1533,8 +1486,6 @@ def main():
     global PADDING_COLOR
     global LANDSCAPE_RTL
     global MANHWA
-    global ORIENTATION # New
-    global TARGET_WIDTH, TARGET_HEIGHT
     
     # New globals
     global XTC_MODE
@@ -1548,18 +1499,6 @@ def main():
     INVERT_COLORS = "--invert" in sys.argv
     LANDSCAPE_RTL = "--landscape-rtl" in sys.argv
     MANHWA = "--manhwa" in sys.argv
-    ORIENTATION = "portrait"
-
-    if "--orientation" in sys.argv:
-        try:
-            idx = sys.argv.index("--orientation")
-            val = sys.argv[idx + 1].lower()
-            if val in ["portrait", "landscape", "landscape-flipped", "portrait-flipped"]:
-                ORIENTATION = val
-            else:
-                print(f"Warning: Invalid orientation '{val}', using default 'portrait'")
-        except (ValueError, IndexError):
-            print("Warning: Invalid orientation, using default 'portrait'")
     
     if "--gamma" in sys.argv:
         try:
@@ -1639,13 +1578,7 @@ def main():
     while i < len(sys.argv):
         arg = sys.argv[i]
         # Skip value args we already handled or boolean args
-        if arg == "--device":
-            if i+1 < len(sys.argv):
-                dev = sys.argv[i+1].upper()
-                if dev in DEVICE_DIMENSIONS:
-                    TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS[dev]
-                i += 1
-        elif arg in ["--dither", "--2bit", "--no-dither", "--clean", "--overlap", "--split-all", "--pad-black", "--include-overviews", "--sideways-overviews", "--gamma", "--invert", "--downscale"]:
+        if arg in ["--dither", "--2bit", "--no-dither", "--clean", "--overlap", "--split-all", "--pad-black", "--include-overviews", "--sideways-overviews", "--gamma", "--invert", "--downscale"]:
             if arg == "--dither" or arg == "--gamma" or arg == "--downscale":
                  i += 1 # skip value
             # booleans are already handled
