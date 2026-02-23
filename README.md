@@ -1,6 +1,6 @@
 # XTEink Manga Tools
 
-Tools for converting CBZ, PDF, and images to XTC/XTCH format for XTEink X4 and X3 e-readers.
+Tools for converting CBZ, PDF, and images to XTC/XTCH format for XTEink X4 e-readers.
 
 ## Installation
 
@@ -75,10 +75,6 @@ python cbz2xtc.py --manhwa --downscale bicubic
 ```bash
 python cbz2xtc.py --2bit --downscale bicubic
 ```
-- for XTEink X3 (528x792)
-```bash
-python cbz2xtc.py --device X3 --2bit
-```
 ### cbz2xth.py
 ```bash
 python image2xth.py input.png --downscale bicubic
@@ -142,22 +138,12 @@ Available for all tools (`--dither <algo>`):
 | `rasterize` | Halftone style (cbz/web only). |
 | `none` | Pure threshold (no dithering). Best for crisp text. |
 
-### Orientation Options
-Available for `image2xth.py` and `cbz2xtc.py` (`--orientation <mode>`):
-| Mode | Description |
-| :--- | :--- |
-| `portrait` | (Default) Standard upright orientation. Auto-rotates wide spreads (-90°). |
-| `landscape` | Rotates image **90° clockwise** (top becomes right). |
-| `landscape-flipped` | Rotates image **90° counter-clockwise** (-90°, top becomes left). |
-| `portrait-flipped` | Rotates image **180°** (upside down). |
-
 ## Options Reference
 
 ### General Options (cbz2xtc, web2xtc, video2xtc, image2xth)
 | Option | Effect |
 | :--- | :--- |
 | `--2bit` | Use 4-level grayscale (higher quality, larger file size). |
-| `--device X4` | Target device: `X4` (480x800, default) or `X3` (528x792). |
 | `--downscale bicubic` | Downscaling filter: bicubic (default), bilinear, box, lanczos, nearest. |
 | `--dither <algo>` | Choose dithering algorithm (see above). |
 | `--gamma 0.7` | Brighten the image (use values like 0.5 to 0.9). |
