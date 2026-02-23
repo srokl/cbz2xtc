@@ -1,6 +1,6 @@
 # XTEink Manga Tools
 
-Tools for converting CBZ, PDF, and images to XTC/XTCH format for the XTEink X4 e-reader.
+Tools for converting CBZ, PDF, and images to XTC/XTCH format for XTEink X4 and X3 e-readers.
 
 ## Installation
 
@@ -74,6 +74,10 @@ python cbz2xtc.py --manhwa --downscale bicubic
 - for pdf
 ```bash
 python cbz2xtc.py --2bit --downscale bicubic
+```
+- for XTEink X3 (528x792)
+```bash
+python cbz2xtc.py --device X3 --2bit
 ```
 ### cbz2xth.py
 ```bash
@@ -153,6 +157,7 @@ Available for `image2xth.py` and `cbz2xtc.py` (`--orientation <mode>`):
 | Option | Effect |
 | :--- | :--- |
 | `--2bit` | Use 4-level grayscale (higher quality, larger file size). |
+| `--device X4` | Target device: `X4` (480x800, default) or `X3` (528x792). |
 | `--downscale bicubic` | Downscaling filter: bicubic (default), bilinear, box, lanczos, nearest. |
 | `--dither <algo>` | Choose dithering algorithm (see above). |
 | `--gamma 0.7` | Brighten the image (use values like 0.5 to 0.9). |

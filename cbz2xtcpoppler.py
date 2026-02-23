@@ -36,8 +36,12 @@ import time
 
 
 # Configuration
-TARGET_WIDTH = 480
-TARGET_HEIGHT = 800
+DEVICE_DIMENSIONS = {
+    'X4': (480, 800),
+    'X3': (528, 792)
+}
+
+TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS['X4']
 
 # Global configuration (defaults)
 XTC_MODE = "1bit"        # "1bit" or "2bit"
@@ -1395,6 +1399,7 @@ def main():
         print("  cbz2xtc --invert                  # Invert colors (White <-> Black)")
         print("  cbz2xtc --clean                   # Auto-delete temp PNG files")
         print("  cbz2xtc --orientation <mode>      # Set orientation: portrait, landscape, landscape-flipped, portrait-flipped")
+        print("  cbz2xtc --device <X4|X3>          # Target device (default X4: 480x800, X3: 528x792)")
         print("\nDithering Algorithms:")
         print("  stucki     - Stucki (Default, sharpest)")
         print("  atkinson   - Atkinson (Sharp shading)")
@@ -1481,6 +1486,7 @@ def main():
     global LANDSCAPE_RTL
     global MANHWA
     global ORIENTATION # New
+    global TARGET_WIDTH, TARGET_HEIGHT
     
     # New globals
     global XTC_MODE
@@ -1585,7 +1591,13 @@ def main():
     while i < len(sys.argv):
         arg = sys.argv[i]
         # Skip value args we already handled or boolean args
-        if arg in ["--dither", "--2bit", "--no-dither", "--clean", "--overlap", "--split-all", "--pad-black", "--include-overviews", "--sideways-overviews", "--gamma", "--invert", "--downscale"]:
+        if arg == "--device":
+            if i+1 < len(sys.argv):
+                dev = sys.argv[i+1].upper()
+                if dev in DEVICE_DIMENSIONS:
+                    TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS[dev]
+                i += 1
+        elif arg in ["--dither", "--2bit", "--no-dither", "--clean", "--overlap", "--split-all", "--pad-black", "--include-overviews", "--sideways-overviews", "--gamma", "--invert", "--downscale"]:
             if arg == "--dither" or arg == "--gamma" or arg == "--downscale":
                  i += 1 # skip value
             # booleans are already handled

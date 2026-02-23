@@ -34,8 +34,12 @@ Image.MAX_IMAGE_PIXELS = None
 
 
 # Configuration
-TARGET_WIDTH = 480
-TARGET_HEIGHT = 800
+DEVICE_DIMENSIONS = {
+    'X4': (480, 800),
+    'X3': (528, 792)
+}
+
+TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS['X4']
 
 # Global configuration (defaults)
 XTC_MODE = "1bit"        # "1bit" or "2bit"
@@ -1577,7 +1581,6 @@ def main():
         print("\n  --help, -h    Show this help message")
         return 0
     
-    # Parse globals
     global OVERLAP, SPLIT_SPREADS, SPLIT_SPREADS_PAGES, SPLIT_ALL, SKIP_ON, SKIP_PAGES, ONLY_ON, ONLY_PAGES
     global DONT_SPLIT, DONT_SPLIT_PAGES, CONTRAST_BOOST, CONTRAST_VALUE, MARGIN, MARGIN_VALUE
     global INCLUDE_OVERVIEWS, SIDEWAYS_OVERVIEWS, SELECT_OVERVIEWS, SELECT_OV_PAGES
@@ -1585,12 +1588,21 @@ def main():
     global DESIRED_V_OVERLAP_SEGMENTS, SET_H_OVERLAP_SEGMENTS, MINIMUM_V_OVERLAP_PERCENT, SET_H_OVERLAP_PERCENT
     global MAX_SPLIT_WIDTH, PADDING_COLOR, LANDSCAPE_RTL, MANHWA
     global XTC_MODE, DITHER_ALGO, DOWNSCALE_FILTER, GAMMA_VALUE, INVERT_COLORS, VIEWPORT, COOKIES_FILE, DYNAMIC_MODE, PARALLEL_LINKS, WEBSITE_MODE
+    global TARGET_WIDTH, TARGET_HEIGHT
 
     clean_temp = "--clean" in sys.argv
     INVERT_COLORS = "--invert" in sys.argv
     LANDSCAPE_RTL = "--landscape-rtl" in sys.argv
     DYNAMIC_MODE = "--dynamic" in sys.argv
     PARALLEL_LINKS = "--parallel-links" in sys.argv
+
+    if "--device" in sys.argv:
+        try:
+            idx = sys.argv.index("--device")
+            dev = sys.argv[idx+1].upper()
+            if dev in DEVICE_DIMENSIONS:
+                TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS[dev]
+        except: pass
 
     if "--downscale" in sys.argv:
         try:

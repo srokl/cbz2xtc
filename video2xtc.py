@@ -26,8 +26,12 @@ from PIL import Image, ImageOps, ImageDraw, ImageFont
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configuration
-TARGET_WIDTH = 480
-TARGET_HEIGHT = 800
+DEVICE_DIMENSIONS = {
+    'X4': (480, 800),
+    'X3': (528, 792)
+}
+
+TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS['X4']
 
 # Global configuration (defaults)
 XTC_MODE = "1bit"
@@ -478,7 +482,7 @@ def main():
         print("  --clean          Delete temp files")
         return 0
 
-    global XTC_MODE, DITHER_ALGO, GAMMA_VALUE, INVERT_COLORS, FPS_VALUE
+    global XTC_MODE, DITHER_ALGO, GAMMA_VALUE, INVERT_COLORS, FPS_VALUE, TARGET_WIDTH, TARGET_HEIGHT
     
     clean_temp = "--clean" in sys.argv
     INVERT_COLORS = "--invert" in sys.argv
@@ -497,6 +501,11 @@ def main():
             i += 1
         elif arg == "--fps":
             FPS_VALUE = float(sys.argv[i+1])
+            i += 1
+        elif arg == "--device":
+            dev = sys.argv[i+1].upper()
+            if dev in DEVICE_DIMENSIONS:
+                TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS[dev]
             i += 1
         elif not arg.startswith("--"):
             files.append(Path(arg))

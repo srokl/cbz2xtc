@@ -10,6 +10,7 @@ Usage:
     image2xth image.jpg --dither floyd        # Floyd-Steinberg dithering
     image2xth image.jpg --gamma 0.7           # Adjust brightness
     image2xth image.jpg --orientation landscape # Rotate 90 degrees
+    image2xth image.jpg --device X3           # Target X3 (528x792)
     image2xth folder/                         # Convert all images in folder
 
 Modes:
@@ -53,8 +54,12 @@ DOWNSCALE_MAP = {
 }
 
 # Configuration
-TARGET_WIDTH = 480
-TARGET_HEIGHT = 800
+DEVICE_DIMENSIONS = {
+    'X4': (480, 800),
+    'X3': (528, 792)
+}
+
+TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS['X4']
 SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff', '.tif'}
 
 @njit
@@ -345,6 +350,7 @@ def main():
         return 0
     
     global DOWNSCALE_FILTER
+    global TARGET_WIDTH, TARGET_HEIGHT
     dither_algo = DITHER_ALGO
     gamma = 1.0
     invert = "--invert" in args
@@ -358,6 +364,12 @@ def main():
     if '--orientation' in args:
         idx = args.index('--orientation')
         if idx + 1 < len(args): orientation = args[idx+1].lower()
+    if '--device' in args:
+        idx = args.index('--device')
+        if idx + 1 < len(args):
+            dev = args[idx+1].upper()
+            if dev in DEVICE_DIMENSIONS:
+                TARGET_WIDTH, TARGET_HEIGHT = DEVICE_DIMENSIONS[dev]
     if '--downscale' in args:
         idx = args.index('--downscale')
         if idx + 1 < len(args):
