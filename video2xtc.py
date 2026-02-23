@@ -47,6 +47,54 @@ DITHER_MAP = {
 }
 
 @njit
+def _zhoufang_loop(data, w, h, stride, is_2bit):
+    for y in range(h):
+        row_start = y * stride
+        for x in range(1, w + 1):
+            idx = row_start + x
+            old_val = data[idx]
+            if is_2bit:
+                if old_val < 42: new_val = 0
+                elif old_val < 127: new_val = 85
+                elif old_val < 212: new_val = 170
+                else: new_val = 255
+            else:
+                new_val = 0 if old_val < 128 else 255
+            data[idx] = new_val
+            err = old_val - new_val
+            if err != 0:
+                e = err / 103
+                if x + 1 < w: data[idx + 1] += int(e * 16)
+                if x + 2 < w: data[idx + 2] += int(e * 9)
+                idx_n = idx + stride
+                if idx_n < len(data):
+                    if x - 2 > 0: data[idx_n - 2] += int(e * 5)
+                    if x - 1 > 0: data[idx_n - 1] += int(e * 11)
+                    data[idx_n] += int(e * 16)
+                    if x + 1 < w: data[idx_n + 1] += int(e * 11)
+                    if x + 2 < w: data[idx_n + 2] += int(e * 5)
+                idx_n2 = idx + (stride * 2)
+                if idx_n2 < len(data):
+                    if x - 2 > 0: data[idx_n2 - 2] += int(e * 1)
+                    if x - 1 > 0: data[idx_n2 - 1] += int(e * 5)
+                    data[idx_n2] += int(e * 9)
+                    if x + 1 < w: data[idx_n2 + 1] += int(e * 5)
+                    if x + 2 < w: data[idx_n2 + 2] += int(e * 3)
+
+def dither_zhoufang(img, levels):
+    w, h = img.size
+    stride = w + 3
+    buff = np.zeros((h + 3, stride), dtype=np.int16)
+    img_arr = np.array(img, dtype=np.int16)
+    buff[0:h, 1:w+1] = img_arr
+    data = buff.flatten()
+    is_2bit = (len(levels) > 2)
+    _zhoufang_loop(data, w, h, stride, is_2bit)
+    res_arr = data.reshape((h + 3, stride))
+    final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
+    return Image.fromarray(final_arr, 'L')
+
+@njit
 def _ostromoukhov_loop(data, w, h, stride, is_2bit):
     for y in range(h):
         row_start = y * stride
@@ -330,6 +378,8 @@ def optimize_frame(img, output_path):
             result = dither_stucki(result, levels=[0, 85, 170, 255])
         elif DITHER_ALGO == 'ostromoukhov':
             result = dither_ostromoukhov(result, levels=[0, 85, 170, 255])
+        elif DITHER_ALGO == 'zhoufang':
+            result = dither_zhoufang(result, levels=[0, 85, 170, 255])
         else:
             pal_img = Image.new("P", (1, 1))
             pal_img.putpalette([0,0,0, 85,85,85, 170,170,170, 255,255,255] + [0,0,0]*252)
@@ -345,6 +395,9 @@ def optimize_frame(img, output_path):
             result = result.convert('1', dither=Image.Dither.NONE)
         elif DITHER_ALGO == 'ostromoukhov':
             result = dither_ostromoukhov(result, levels=[0, 255])
+            result = result.convert('1', dither=Image.Dither.NONE)
+        elif DITHER_ALGO == 'zhoufang':
+            result = dither_zhoufang(result, levels=[0, 255])
             result = result.convert('1', dither=Image.Dither.NONE)
         else:
             dither_mode = DITHER_MAP.get(DITHER_ALGO, Image.Dither.FLOYDSTEINBERG)
@@ -419,7 +472,7 @@ def main():
         print("Options:")
         print("  --fps <float>    Frames per second (default 1.0)")
         print("  --2bit           Use 2-bit grayscale")
-        print("  --dither <algo>  stucki (default), atkinson, ostromoukhov, floyd, ordered, none")
+        print("  --dither <algo>  stucki (default), atkinson, ostromoukhov, zhoufang, floyd, ordered, none")
         print("  --gamma <float>  Brightness (default 1.0)")
         print("  --invert         Invert colors")
         print("  --clean          Delete temp files")
