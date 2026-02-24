@@ -44,8 +44,40 @@ DITHER_MAP = {
     'atkinson': 'atkinson',
     'stucki': 'stucki',
     'ostromoukhov': 'ostromoukhov',
-    'zhoufang': 'zhoufang'
+    'zhoufang': 'zhoufang',
+    'stochastic': 'stochastic'
 }
+
+@njit
+def _stochastic_loop(data, w, h, stride, is_2bit, random_values):
+    for y in range(h):
+        row_start = y * stride
+        for x in range(1, w + 1):
+            idx = row_start + x
+            old_val = data[idx]
+            r = random_values[y, x-1]
+            if is_2bit:
+                if old_val < (r * 85 // 255): new_val = 0
+                elif old_val < (85 + r * 85 // 255): new_val = 85
+                elif old_val < (170 + r * 85 // 255): new_val = 170
+                else: new_val = 255
+            else:
+                new_val = 0 if old_val < r else 255
+            data[idx] = new_val
+
+def dither_stochastic(img, levels):
+    w, h = img.size
+    stride = w + 3
+    buff = np.zeros((h + 3, stride), dtype=np.int16)
+    img_arr = np.array(img, dtype=np.int16)
+    buff[0:h, 1:w+1] = img_arr
+    data = buff.flatten()
+    is_2bit = (len(levels) > 2)
+    random_values = np.random.randint(0, 256, (h, w)).astype(np.int16)
+    _stochastic_loop(data, w, h, stride, is_2bit, random_values)
+    res_arr = data.reshape((h + 3, stride))
+    final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
+    return Image.fromarray(final_arr, 'L')
 
 @njit
 def _zhoufang_loop(data, w, h, stride, is_2bit):
@@ -382,6 +414,8 @@ def optimize_frame(img, output_path):
             result = dither_ostromoukhov(result, levels=[0, 85, 170, 255])
         elif DITHER_ALGO == 'zhoufang':
             result = dither_zhoufang(result, levels=[0, 85, 170, 255])
+        elif DITHER_ALGO == 'stochastic':
+            result = dither_stochastic(result, levels=[0, 85, 170, 255])
         else:
             pal_img = Image.new("P", (1, 1))
             pal_img.putpalette([0,0,0, 85,85,85, 170,170,170, 255,255,255] + [0,0,0]*252)
@@ -400,6 +434,9 @@ def optimize_frame(img, output_path):
             result = result.convert('1', dither=Image.Dither.NONE)
         elif DITHER_ALGO == 'zhoufang':
             result = dither_zhoufang(result, levels=[0, 255])
+            result = result.convert('1', dither=Image.Dither.NONE)
+        elif DITHER_ALGO == 'stochastic':
+            result = dither_stochastic(result, levels=[0, 255])
             result = result.convert('1', dither=Image.Dither.NONE)
         else:
             dither_mode = DITHER_MAP.get(DITHER_ALGO, Image.Dither.FLOYDSTEINBERG)
@@ -474,7 +511,7 @@ def main():
         print("Options:")
         print("  --fps <float>    Frames per second (default 1.0)")
         print("  --2bit           Use 2-bit grayscale")
-        print("  --dither <algo>  stucki (default), atkinson, ostromoukhov, zhoufang, floyd, ordered, none")
+        print("  --dither <algo>  stucki (default), atkinson, ostromoukhov, zhoufang, stochastic, floyd, ordered, none")
         print("  --gamma <float>  Brightness (default 1.0)")
         print("  --invert         Invert colors")
         print("  --clean          Delete temp files")

@@ -18,7 +18,7 @@ Modes:
     crop            - Center crop 480x800 from original without scaling
 
 Dithering:
-    stucki (default), atkinson, ostromoukhov, zhoufang, floyd, none
+    stucki (default), atkinson, ostromoukhov, zhoufang, stochastic, floyd, none
 """
 
 import os
@@ -52,6 +52,34 @@ DOWNSCALE_MAP = {
 TARGET_WIDTH = 480
 TARGET_HEIGHT = 800
 SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff', '.tif'}
+
+@njit
+def _stochastic_loop(data, w, h, stride, random_values):
+    for y in range(h):
+        row_start = y * stride
+        for x in range(1, w + 1):
+            idx = row_start + x
+            old_val = data[idx]
+            r = random_values[y, x-1]
+            # 4 levels: 0, 85, 170, 255
+            if old_val < (r * 85 // 255): new_val = 0
+            elif old_val < (85 + r * 85 // 255): new_val = 85
+            elif old_val < (170 + r * 85 // 255): new_val = 170
+            else: new_val = 255
+            data[idx] = new_val
+
+def dither_stochastic(img):
+    w, h = img.size
+    stride = w + 3
+    buff = np.zeros((h + 3, stride), dtype=np.int16)
+    img_arr = np.array(img, dtype=np.int16)
+    buff[0:h, 1:w+1] = img_arr
+    data = buff.flatten()
+    random_values = np.random.randint(0, 256, (h, w)).astype(np.int16)
+    _stochastic_loop(data, w, h, stride, random_values)
+    res_arr = data.reshape((h + 3, stride))
+    final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
+    return Image.fromarray(final_arr, 'L')
 
 @njit
 def _zhoufang_loop(data, w, h, stride):
@@ -267,6 +295,8 @@ def convert_to_xth(input_path, output_path, dither_algo='atkinson', gamma=1.0, i
             result = dither_ostromoukhov(result)
         elif dither_algo == 'zhoufang':
             result = dither_zhoufang(result)
+        elif dither_algo == 'stochastic':
+            result = dither_stochastic(result)
         elif dither_algo == 'floyd':
             pal_img = Image.new("P", (1, 1))
             pal_img.putpalette([0,0,0, 85,85,85, 170,170,170, 255,255,255] + [0,0,0]*252)

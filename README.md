@@ -1,6 +1,6 @@
 # XTEink Manga Tools
 
-Tools for converting CBZ, PDF, and images to XTC/XTCH format for XTEink X4 e-readers.
+Tools for converting CBZ, PDF, and images to XTC/XTCH format for the XTEink X4 e-reader.
 
 ## Installation
 
@@ -63,9 +63,9 @@ python3 video2xtc.py movie.mp4 <options>
 Open your terminal (Command Prompt on Windows, Terminal on macOS/Linux) and run:
 ### cbz2xtc.py or cbz2xtcpoppler.py
 The default is xtc 1-bit.
-- for 2-bit manga with high quality dithering
+- for 2-bit manga
 ```bash
-python cbz2xtc.py --2bit --landscape-rtl --sideways-overviews --dither zhoufang
+python cbz2xtc.py --2bit --landscape-rtl --sideways-overviews --downscale bicubic
 ```
 - for manhwa
 ```bash
@@ -125,62 +125,37 @@ Converts video files (MP4, MKV, AVI, etc.) to XTC/XTCH format.
 Converts a single image (like a wallpaper) to XTCH (2-bit grayscale) format.
 - Supports **Cover**, **Letterbox**, and **Fill** modes.
 
-### Dithering Options
-Available for all tools (`--dither <algo>`):
-| Algorithm | Description |
-| :--- | :--- |
-| `stucki` | (Default) High-quality error diffusion, sharpest details. |
-| `atkinson` | Sharp error diffusion, good contrast preservation. |
-| `ostromoukhov` | (Experimental) Variable-coefficient error diffusion, smooth "blue noise" look. |
-| `zhoufang` | (Experimental) High-quality 12-pixel kernel, reduced artifacts/worms. |
-| `floyd` | Floyd-Steinberg. Standard smooth gradients. |
-| `ordered` | Bayer matrix ordered dithering (grid pattern). |
-| `rasterize` | Halftone style (cbz/web only). |
-| `none` | Pure threshold (no dithering). Best for crisp text. |
+### image2bw.py
+Converts a single image to 1-bit BMP format (perfect for fast-loading backgrounds).
 
 ## Options Reference
 
-### General Options (cbz2xtc, web2xtc, video2xtc, image2xth)
+### General Options (cbz2xtc, web2xtc, video2xtc)
 | Option | Effect |
 | :--- | :--- |
-| `--2bit` | Use 4-level grayscale (higher quality, larger file size). |
-| `--downscale bicubic` | Downscaling filter: bicubic (default), bilinear, box, lanczos, nearest. |
-| `--dither <algo>` | Choose dithering algorithm (see above). |
-| `--gamma 0.7` | Brighten the image (use values like 0.5 to 0.9). |
-| `--invert` | Invert colors (White <-> Black). |
-| `--clean` | Delete temporary files after the conversion is done. |
-
-### Tool-Specific Options
-
-#### cbz2xtc.py (Manga/PDF)
-| Option | Effect |
-| :--- | :--- |
-| `--manhwa` | Use 75% vertical overlap for long-strip webtoons. |
+| `--2bit` | Use 4-level grayscale (higher quality). |
+| `--downscale bicubic` | Downscaling filter: bicubic (default), bilinear, box. |
+| `--manhwa` | Use 75% overlap for long-strip webtoons (cbz/web only). |
 | `--landscape-rtl` | Process wide pages from Right-to-Left (for Japanese manga). |
 | `--include-overviews` | Add an upright full-page preview before segments. |
 | `--sideways-overviews` | Add a rotated full-page preview (-90 degrees). |
-| `--orientation <mode>` | Force rotation mode (see above). |
-| `--hsplit-count <N>` | Split page horizontally into N segments (for panoramas). |
+| `--gamma 0.7` | Brighten the image (use values like 0.5 to 0.9). |
+| `--clean` | Delete temporary files after the conversion is done. |
 
-#### video2xtc.py (Video)
+### Video Options (video2xtc.py only)
 | Option | Effect |
 | :--- | :--- |
 | `--fps 1.0` | Frames per second to extract (Default: 1.0). |
+| `--invert` | Invert colors (White <-> Black). |
+| `--dither stucki` | Dithering: stucki, atkinson, ostromoukhov, zhoufang, stochastic, floyd, ordered, none. |
 
-#### web2xtc.py (Web)
+### Web Options (web2xtc.py only)
 | Option | Effect |
 | :--- | :--- |
 | `--dynamic` | Expands menus and crawls 1st-page links (chapters). |
 | `--parallel-links` | Crawls sub-links in parallel (faster). |
 | `--viewport mobile` | Use mobile layout (iPhone 13 Pro). Default is desktop. |
 | `--cookies file.txt` | Load cookies from a Netscape-formatted file. |
-
-#### image2xth.py (Single Image)
-| Option | Effect |
-| :--- | :--- |
-| `--mode <mode>` | Scaling mode: `cover` (fill & crop), `letterbox` (fit & pad), `fill` (stretch), `crop` (no scale). |
-| `--pad black` | Use black background instead of white for letterboxing. |
-| `--orientation <mode>` | Force rotation mode (see above). |
 
 ## Visual Samples
 
@@ -199,8 +174,9 @@ The tool splits images into segments to fill the screen correctly. Here is how a
 
 | Option | Preview | Description |
 | :--- | :---: | :--- |
-| **Stucki** | ![Atkinson](samples/landscape_seg_a.png) | Default. High-quality error diffusion. |
+| **Stucki** | ![Stucki](samples/landscape_seg_a.png) | Default. High-quality error diffusion. |
 | **Atkinson** | ![Atkinson](samples/landscape_seg_a.png) | Sharp and clean shading. |
+| **Stochastic** | ![Stochastic](samples/landscape_seg_a.png) | Randomized screening (no pattern artifacts). |
 | **Floyd-Steinberg** | ![Floyd](samples/dither_floyd.png) | Smoother gradients, traditional look. |
 | **No Dithering** | ![None](samples/dither_none.png) | Pure Black & White. Best for text. |
 | **2-bit Grayscale** | ![2-bit](samples/mode_2bit.png) | 4 levels of gray. Highest quality. |

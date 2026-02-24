@@ -55,7 +55,8 @@ DITHER_MAP = {
     'atkinson': 'atkinson', # Custom implementation
     'stucki': 'stucki', # Custom implementation
     'ostromoukhov': 'ostromoukhov', # Custom implementation
-    'zhoufang': 'zhoufang' # Custom implementation
+    'zhoufang': 'zhoufang', # Custom implementation
+    'stochastic': 'stochastic' # Custom implementation
 }
 
 # Downscaling options mapping
@@ -67,6 +68,38 @@ DOWNSCALE_MAP = {
     'nearest': Image.Resampling.NEAREST
 }
 
+
+@njit
+def _stochastic_loop(data, w, h, stride, is_2bit, random_values):
+    for y in range(h):
+        row_start = y * stride
+        for x in range(1, w + 1):
+            idx = row_start + x
+            old_val = data[idx]
+            r = random_values[y, x-1]
+            if is_2bit:
+                # 4 levels: 0, 85, 170, 255
+                if old_val < (r * 85 // 255): new_val = 0
+                elif old_val < (85 + r * 85 // 255): new_val = 85
+                elif old_val < (170 + r * 85 // 255): new_val = 170
+                else: new_val = 255
+            else:
+                new_val = 0 if old_val < r else 255
+            data[idx] = new_val
+
+def dither_stochastic(img, levels):
+    w, h = img.size
+    stride = w + 3
+    buff = np.zeros((h + 3, stride), dtype=np.int16)
+    img_arr = np.array(img, dtype=np.int16)
+    buff[0:h, 1:w+1] = img_arr
+    data = buff.flatten()
+    is_2bit = (len(levels) > 2)
+    random_values = np.random.randint(0, 256, (h, w)).astype(np.int16)
+    _stochastic_loop(data, w, h, stride, is_2bit, random_values)
+    res_arr = data.reshape((h + 3, stride))
+    final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
+    return Image.fromarray(final_arr, 'L')
 
 @njit
 def _zhoufang_loop(data, w, h, stride, is_2bit):
@@ -967,6 +1000,9 @@ def save_with_padding(img, output_path, *, padcolor=255):
         elif DITHER_ALGO == 'zhoufang':
             result = dither_zhoufang(result, levels=[0, 85, 170, 255])
             
+        elif DITHER_ALGO == 'stochastic':
+            result = dither_stochastic(result, levels=[0, 85, 170, 255])
+            
         else:
             # Use Floyd-Steinberg Dithering (Best for photos/gradients)
             # Create a 4-color palette image
@@ -996,6 +1032,9 @@ def save_with_padding(img, output_path, *, padcolor=255):
             result = result.convert('1', dither=Image.Dither.NONE)
         elif DITHER_ALGO == 'zhoufang':
             result = dither_zhoufang(result, levels=[0, 255])
+            result = result.convert('1', dither=Image.Dither.NONE)
+        elif DITHER_ALGO == 'stochastic':
+            result = dither_stochastic(result, levels=[0, 255])
             result = result.convert('1', dither=Image.Dither.NONE)
         else:
             dither_mode = DITHER_MAP.get(DITHER_ALGO, Image.Dither.FLOYDSTEINBERG)
@@ -1406,6 +1445,7 @@ def main():
         print("  atkinson   - Atkinson (Sharp shading)")
         print("  ostromoukhov - Ostromoukhov (Blue noise, smooth)")
         print("  zhoufang   - Zhou-Fang (High quality, reduced artifacts)")
+        print("  stochastic - Stochastic screening (Randomized)")
         print("  floyd      - Floyd-Steinberg (Smooth gradients)")
         print("  ordered    - Ordered/Bayer (Grid pattern)")
         print("  rasterize  - Halftone style")
