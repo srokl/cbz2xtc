@@ -175,8 +175,8 @@ The tool splits images into segments to fill the screen correctly. Here is how a
 | Option | Preview | Description |
 | :--- | :---: | :--- |
 | **Stucki** | ![Stucki](samples/landscape_seg_a.png) | Default. High-quality error diffusion. |
-| **Atkinson** | ![Atkinson](samples/landscape_seg_a.png) | Sharp and clean shading. |
-| **Stochastic** | ![Stochastic](samples/landscape_seg_a.png) | Randomized screening (no pattern artifacts). |
+| **Atkinson** | ![Atkinson](samples/dither_atkinson.png) | Sharp and clean shading. |
+| **Stochastic** | ![Stochastic](samples/dither_stochastic.png) | Velho SFC Error Diffusion (Structure-aware). |
 | **Floyd-Steinberg** | ![Floyd](samples/dither_floyd.png) | Smoother gradients, traditional look. |
 | **No Dithering** | ![None](samples/dither_none.png) | Pure Black & White. Best for text. |
 | **2-bit Grayscale** | ![2-bit](samples/mode_2bit.png) | 4 levels of gray. Highest quality. |

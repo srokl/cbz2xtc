@@ -103,21 +103,63 @@ def parse_netscape_cookies(cookie_file):
 
 
 @njit
-def _stochastic_loop(data, w, h, stride, is_2bit, random_values):
-    for y in range(h):
-        row_start = y * stride
-        for x in range(1, w + 1):
-            idx = row_start + x
-            old_val = data[idx]
-            r = random_values[y, x-1]
+def rot(n, x, y, rx, ry):
+    if ry == 0:
+        if rx == 1:
+            x = n - 1 - x
+            y = n - 1 - y
+        return y, x
+    return x, y
+
+@njit
+def d2xy(n, d):
+    t = d
+    x = 0
+    y = 0
+    s = 1
+    while s < n:
+        rx = 1 & (t // 2)
+        ry = 1 & (t ^ rx)
+        x, y = rot(s, x, y, rx, ry)
+        x += s * rx
+        y += s * ry
+        t //= 4
+        s *= 2
+    return x, y
+
+@njit
+def _stochastic_loop(data, w, h, stride, is_2bit):
+    # Determine N (power of 2) covering the image
+    n = 1
+    while n < w or n < h:
+        n *= 2
+    
+    acc_err = 0
+    total_points = n * n
+    
+    for d in range(total_points):
+        x, y = d2xy(n, d)
+        
+        # Check if point is within image bounds
+        if x < w and y < h:
+            # Buffer layout: rows 0..h-1, cols 1..w (0 is padding)
+            idx = y * stride + (x + 1)
+            
+            old_val = data[idx] + acc_err
+            
+            # Quantize
             if is_2bit:
-                if old_val < (r * 85 // 255): new_val = 0
-                elif old_val < (85 + r * 85 // 255): new_val = 85
-                elif old_val < (170 + r * 85 // 255): new_val = 170
+                # 4 levels: 0, 85, 170, 255
+                # Thresholds: 42, 127, 212
+                if old_val < 42: new_val = 0
+                elif old_val < 127: new_val = 85
+                elif old_val < 212: new_val = 170
                 else: new_val = 255
             else:
-                new_val = 0 if old_val < r else 255
+                new_val = 0 if old_val < 128 else 255
+            
             data[idx] = new_val
+            acc_err = old_val - new_val
 
 def dither_stochastic(img, levels):
     w, h = img.size
@@ -127,8 +169,8 @@ def dither_stochastic(img, levels):
     buff[0:h, 1:w+1] = img_arr
     data = buff.flatten()
     is_2bit = (len(levels) > 2)
-    random_values = np.random.randint(0, 256, (h, w)).astype(np.int16)
-    _stochastic_loop(data, w, h, stride, is_2bit, random_values)
+    # No random values needed for SFC Error Diffusion
+    _stochastic_loop(data, w, h, stride, is_2bit)
     res_arr = data.reshape((h + 3, stride))
     final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
     return Image.fromarray(final_arr, 'L')
@@ -1566,7 +1608,7 @@ def main():
         print("  atkinson   - Atkinson (Sharp shading)")
         print("  ostromoukhov - Ostromoukhov (Blue noise, smooth)")
         print("  zhoufang   - Zhou-Fang (High quality, reduced artifacts)")
-        print("  stochastic - Stochastic screening (Randomized)")
+        print("  stochastic - Velho SFC (Space-Filling Curve Error Diffusion)")
         print("  floyd      - Floyd-Steinberg (Smooth gradients)")
         print("  ordered    - Ordered/Bayer (Grid pattern)")
         print("  rasterize  - Halftone style")
