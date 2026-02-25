@@ -135,7 +135,7 @@ Converts a single image to 1-bit BMP format (perfect for fast-loading background
 | :--- | :--- |
 | `--2bit` | Use 4-level grayscale (higher quality). |
 | `--downscale bicubic` | Downscaling filter: bicubic (default), bilinear, box. |
-| `--manhwa` | Use 75% overlap for long-strip webtoons (cbz/web only). |
+| `--manhwa <overlap>` | Use long-strip mode (default 40% overlap) for webtoons (cbz/web only). |
 | `--landscape-rtl` | Process wide pages from Right-to-Left (for Japanese manga). |
 | `--include-overviews` | Add an upright full-page preview before segments. |
 | `--sideways-overviews` | Add a rotated full-page preview (-90 degrees). |

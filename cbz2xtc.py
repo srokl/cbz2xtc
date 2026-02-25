@@ -647,7 +647,7 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
     """
     v_overlap = overlap_percent if overlap_percent is not None else MINIMUM_V_OVERLAP_PERCENT
     if MANHWA and overlap_percent is None:
-        v_overlap = 50
+        v_overlap = MANHWA_OVERLAP
     try:
         from io import BytesIO
         uncropped_img = Image.open(BytesIO(img_data))
@@ -1169,7 +1169,7 @@ def process_manhwa_stream(image_iterator, output_folder):
     output_count = 1
     
     slice_height = TARGET_HEIGHT
-    overlap_percent = 75
+    overlap_percent = MANHWA_OVERLAP
     overlap_pixels = int(slice_height * (overlap_percent / 100.0))
     # Standard step (slow scroll for content)
     standard_step = slice_height - overlap_pixels
@@ -1256,7 +1256,7 @@ def extract_pdf_to_png(pdf_path, temp_dir):
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # 2x scale for better quality before resizing
             img_data = pix.tobytes("png")
             output_base = output_folder / f"{idx:04d}"
-            overlap = 50 if MANHWA else 20
+            overlap = MANHWA_OVERLAP if MANHWA else 20
             optimize_image(img_data, output_base, idx, overlap_percent=overlap)
 
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
@@ -1311,7 +1311,7 @@ def extract_cbz_to_png(cbz_path, temp_dir):
                 for idx, img_file in enumerate(image_files, 1):
                     img_data = zip_ref.read(img_file)
                     output_base = output_folder / f"{idx:04d}"
-                    overlap = 50 if MANHWA else None
+                    overlap = MANHWA_OVERLAP if MANHWA else None
                     futures.append(executor.submit(optimize_image, img_data, output_base, idx, overlap_percent=overlap))
                 
                 for _ in as_completed(futures):
@@ -1531,7 +1531,7 @@ def main():
         print("\n  --vsplit-min-overlap <float>   minimum vertical overlap between segments.")
         print("\n  --sample-set <pagenum> ...  Build a spread of contrast samples.")
         print("\n  --landscape-rtl   Process landscape spreads from Right to Left.")
-        print("\n  --manhwa          Use 50% vertical overlap (ideal for webtoons).")
+        print("\n  --manhwa <overlap-percent>  Process as long-strip webtoon. Optionally set overlap percentage (default 40). Example: --manhwa 50")
         print("\n  --clean       Automatically delete temporary PNG files after conversion.")
         print("\n  --help, -h    Show this help message")
         return 0
@@ -1567,6 +1567,7 @@ def main():
     global PADDING_COLOR
     global LANDSCAPE_RTL
     global MANHWA
+    global MANHWA_OVERLAP
     
     # New globals
     global XTC_MODE
@@ -1580,6 +1581,15 @@ def main():
     INVERT_COLORS = "--invert" in sys.argv
     LANDSCAPE_RTL = "--landscape-rtl" in sys.argv
     MANHWA = "--manhwa" in sys.argv
+    MANHWA_OVERLAP = 40
+    
+    if "--manhwa" in sys.argv:
+        try:
+            idx = sys.argv.index("--manhwa")
+            if idx + 1 < len(sys.argv) and not sys.argv[idx+1].startswith("--"):
+                MANHWA_OVERLAP = int(sys.argv[idx + 1])
+        except (ValueError, IndexError):
+            pass
     
     if "--gamma" in sys.argv:
         try:
@@ -1713,6 +1723,9 @@ def main():
         elif arg == "--sample-set":
             SAMPLE_PAGES = sys.argv[i+1].split(',')
             i += 1
+        elif arg == "--manhwa":
+            if i+1 < len(sys.argv) and not sys.argv[i+1].startswith("--"):
+                 i += 1
         elif arg.startswith("--"):
             pass 
         else:

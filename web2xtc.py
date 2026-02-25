@@ -618,7 +618,7 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
     """
     v_overlap = overlap_percent if overlap_percent is not None else MINIMUM_V_OVERLAP_PERCENT
     if MANHWA and overlap_percent is None:
-        v_overlap = 50
+        v_overlap = MANHWA_OVERLAP
     try:
         from io import BytesIO
         uncropped_img = Image.open(BytesIO(img_data))
@@ -1100,7 +1100,7 @@ def process_manhwa_stream(image_iterator, output_folder):
     output_count = 1
     
     slice_height = TARGET_HEIGHT
-    overlap_percent = 75
+    overlap_percent = MANHWA_OVERLAP
     overlap_pixels = int(slice_height * (overlap_percent / 100.0))
     # Standard step (slow scroll for content)
     standard_step = slice_height - overlap_pixels
@@ -1654,6 +1654,7 @@ def main():
         print("\n  --vsplit-min-overlap <float>   minimum vertical overlap between segments.")
         print("\n  --sample-set <pagenum> ...  Build a spread of contrast samples.")
         print("\n  --landscape-rtl   Process landscape spreads from Right to Left.")
+        print("\n  --manhwa <overlap-percent>  Process as long-strip webtoon. Optionally set overlap percentage (default 40). Example: --manhwa 50")
         print("\n  --clean       Automatically delete temporary PNG files after conversion.")
         print("\n  --help, -h    Show this help message")
         return 0
@@ -1664,7 +1665,7 @@ def main():
     global INCLUDE_OVERVIEWS, SIDEWAYS_OVERVIEWS, SELECT_OVERVIEWS, SELECT_OV_PAGES
     global START_PAGE, STOP_PAGE, SAMPLE_SET, SAMPLE_PAGES
     global DESIRED_V_OVERLAP_SEGMENTS, SET_H_OVERLAP_SEGMENTS, MINIMUM_V_OVERLAP_PERCENT, SET_H_OVERLAP_PERCENT
-    global MAX_SPLIT_WIDTH, PADDING_COLOR, LANDSCAPE_RTL, MANHWA
+    global MAX_SPLIT_WIDTH, PADDING_COLOR, LANDSCAPE_RTL, MANHWA, MANHWA_OVERLAP
     global XTC_MODE, DITHER_ALGO, DOWNSCALE_FILTER, GAMMA_VALUE, INVERT_COLORS, VIEWPORT, COOKIES_FILE, DYNAMIC_MODE, PARALLEL_LINKS, WEBSITE_MODE
 
     clean_temp = "--clean" in sys.argv
@@ -1672,6 +1673,15 @@ def main():
     LANDSCAPE_RTL = "--landscape-rtl" in sys.argv
     DYNAMIC_MODE = "--dynamic" in sys.argv
     PARALLEL_LINKS = "--parallel-links" in sys.argv
+    
+    MANHWA_OVERLAP = 40
+    if "--manhwa" in sys.argv:
+        try:
+            idx = sys.argv.index("--manhwa")
+            if idx + 1 < len(sys.argv) and not sys.argv[idx+1].startswith("--"):
+                MANHWA_OVERLAP = int(sys.argv[idx+1])
+        except (ValueError, IndexError):
+            pass
 
     if "--downscale" in sys.argv:
         try:
@@ -1735,8 +1745,8 @@ def main():
             COOKIES_FILE = sys.argv[idx+1]
         except: pass
 
-    # Bind Manhwa mode to mobile viewport
-    MANHWA = (VIEWPORT == "mobile")
+    # Bind Manhwa mode to mobile viewport or direct flag
+    MANHWA = (VIEWPORT == "mobile") or ("--manhwa" in sys.argv)
 
     # Set defaults for other globals
     OVERLAP = "--overlap" in sys.argv
@@ -1768,6 +1778,9 @@ def main():
         elif arg == "--vsplit-target": 
             OVERLAP = True; DESIRED_V_OVERLAP_SEGMENTS = int(sys.argv[i+1])
         elif arg == "--cookies": pass
+        elif arg == "--manhwa":
+            if i+1 < len(sys.argv) and not sys.argv[i+1].startswith("--"):
+                 i += 1
         i += 1
 
     input_arg = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else ""
