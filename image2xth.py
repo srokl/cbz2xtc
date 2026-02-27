@@ -79,7 +79,7 @@ def d2xy(n, d):
     return x, y
 
 @njit
-def _stochastic_loop(data, w, h, stride):
+def _stochastic_loop(data, w, h, stride, is_2bit):
     # Determine N (power of 2) covering the image
     n = 1
     while n < w or n < h:
@@ -98,83 +98,98 @@ def _stochastic_loop(data, w, h, stride):
             
             old_val = data[idx] + acc_err
             
-            # 4 levels: 0, 85, 170, 255
-            # Thresholds: 42, 127, 212
-            if old_val < 42: new_val = 0
-            elif old_val < 127: new_val = 85
-            elif old_val < 212: new_val = 170
-            else: new_val = 255
+            # Quantize
+            if is_2bit:
+                # 4 levels: 0, 85, 170, 255
+                # Thresholds: 42, 127, 212
+                if old_val < 42: new_val = 0
+                elif old_val < 127: new_val = 85
+                elif old_val < 212: new_val = 170
+                else: new_val = 255
+            else:
+                new_val = 0 if old_val < 128 else 255
             
             data[idx] = new_val
             acc_err = old_val - new_val
 
-def dither_stochastic(img):
+def dither_stochastic(img, levels):
     w, h = img.size
     stride = w + 3
     buff = np.zeros((h + 3, stride), dtype=np.int16)
     img_arr = np.array(img, dtype=np.int16)
     buff[0:h, 1:w+1] = img_arr
     data = buff.flatten()
-    _stochastic_loop(data, w, h, stride)
+    is_2bit = (len(levels) > 2)
+    # No random values needed for SFC Error Diffusion
+    _stochastic_loop(data, w, h, stride, is_2bit)
     res_arr = data.reshape((h + 3, stride))
     final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
     return Image.fromarray(final_arr, 'L')
 
 @njit
-def _zhoufang_loop(data, w, h, stride):
+def _zhoufang_loop(data, w, h, stride, is_2bit):
     for y in range(h):
         row_start = y * stride
         for x in range(1, w + 1):
             idx = row_start + x
             old_val = data[idx]
-            if old_val < 42: new_val = 0
-            elif old_val < 127: new_val = 85
-            elif old_val < 212: new_val = 170
-            else: new_val = 255
+            if is_2bit:
+                if old_val < 42: new_val = 0
+                elif old_val < 127: new_val = 85
+                elif old_val < 212: new_val = 170
+                else: new_val = 255
+            else:
+                new_val = 0 if old_val < 128 else 255
             data[idx] = new_val
             err = old_val - new_val
             if err != 0:
-                e = err / 103
-                if x + 1 < w: data[idx + 1] += int(e * 16)
-                if x + 2 < w: data[idx + 2] += int(e * 9)
+                # Row 1
+                if x + 1 < w: data[idx + 1] += (err * 16) // 103
+                if x + 2 < w: data[idx + 2] += (err * 9) // 103
+                # Row 2
                 idx_n = idx + stride
                 if idx_n < len(data):
-                    if x - 2 > 0: data[idx_n - 2] += int(e * 5)
-                    if x - 1 > 0: data[idx_n - 1] += int(e * 11)
-                    data[idx_n] += int(e * 16)
-                    if x + 1 < w: data[idx_n + 1] += int(e * 11)
-                    if x + 2 < w: data[idx_n + 2] += int(e * 5)
+                    if x - 2 > 0: data[idx_n - 2] += (err * 5) // 103
+                    if x - 1 > 0: data[idx_n - 1] += (err * 11) // 103
+                    data[idx_n] += (err * 16) // 103
+                    if x + 1 < w: data[idx_n + 1] += (err * 11) // 103
+                    if x + 2 < w: data[idx_n + 2] += (err * 5) // 103
+                # Row 3
                 idx_n2 = idx + (stride * 2)
                 if idx_n2 < len(data):
-                    if x - 2 > 0: data[idx_n2 - 2] += int(e * 3)
-                    if x - 1 > 0: data[idx_n2 - 1] += int(e * 5)
-                    data[idx_n2] += int(e * 9)
-                    if x + 1 < w: data[idx_n2 + 1] += int(e * 5)
-                    if x + 2 < w: data[idx_n2 + 2] += int(e * 3)
+                    if x - 2 > 0: data[idx_n2 - 2] += (err * 3) // 103
+                    if x - 1 > 0: data[idx_n2 - 1] += (err * 5) // 103
+                    data[idx_n2] += (err * 9) // 103
+                    if x + 1 < w: data[idx_n2 + 1] += (err * 5) // 103
+                    if x + 2 < w: data[idx_n2 + 2] += (err * 3) // 103
 
-def dither_zhoufang(img):
+def dither_zhoufang(img, levels):
     w, h = img.size
     stride = w + 3
     buff = np.zeros((h + 3, stride), dtype=np.int16)
     img_arr = np.array(img, dtype=np.int16)
     buff[0:h, 1:w+1] = img_arr
     data = buff.flatten()
-    _zhoufang_loop(data, w, h, stride)
+    is_2bit = (len(levels) > 2)
+    _zhoufang_loop(data, w, h, stride, is_2bit)
     res_arr = data.reshape((h + 3, stride))
     final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
     return Image.fromarray(final_arr, 'L')
 
 @njit
-def _ostromoukhov_loop(data, w, h, stride):
+def _ostromoukhov_loop(data, w, h, stride, is_2bit):
     for y in range(h):
         row_start = y * stride
         for x in range(1, w + 1):
             idx = row_start + x
             old_val = data[idx]
-            if old_val < 42: new_val = 0
-            elif old_val < 127: new_val = 85
-            elif old_val < 212: new_val = 170
-            else: new_val = 255
+            if is_2bit:
+                if old_val < 42: new_val = 0
+                elif old_val < 127: new_val = 85
+                elif old_val < 212: new_val = 170
+                else: new_val = 255
+            else:
+                new_val = 0 if old_val < 128 else 255
             data[idx] = new_val
             err = old_val - new_val
             if err != 0:
@@ -196,29 +211,33 @@ def _ostromoukhov_loop(data, w, h, stride):
                     if x - 1 > 0: data[idx_n - 1] += int(err * d2)
                     data[idx_n] += int(err * d3)
 
-def dither_ostromoukhov(img):
+def dither_ostromoukhov(img, levels):
     w, h = img.size
     stride = w + 3
     buff = np.zeros((h + 3, stride), dtype=np.int16)
     img_arr = np.array(img, dtype=np.int16)
     buff[0:h, 1:w+1] = img_arr
     data = buff.flatten()
-    _ostromoukhov_loop(data, w, h, stride)
+    is_2bit = (len(levels) > 2)
+    _ostromoukhov_loop(data, w, h, stride, is_2bit)
     res_arr = data.reshape((h + 3, stride))
     final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
     return Image.fromarray(final_arr, 'L')
 
 @njit
-def _stucki_loop(data, w, h, stride):
+def _stucki_loop(data, w, h, stride, is_2bit):
     for y in range(h):
         row_start = y * stride
         for x in range(1, w + 1):
             idx = row_start + x
             old_val = data[idx]
-            if old_val < 42: new_val = 0
-            elif old_val < 127: new_val = 85
-            elif old_val < 212: new_val = 170
-            else: new_val = 255
+            if is_2bit:
+                if old_val < 42: new_val = 0
+                elif old_val < 127: new_val = 85
+                elif old_val < 212: new_val = 170
+                else: new_val = 255
+            else:
+                new_val = 0 if old_val < 128 else 255
             data[idx] = new_val
             err = old_val - new_val
             if err != 0:
@@ -236,32 +255,36 @@ def _stucki_loop(data, w, h, stride):
                     if x - 2 > 0: data[idx_n2 - 2] += (err * 1) // 42
                     if x - 1 > 0: data[idx_n2 - 1] += (err * 2) // 42
                     data[idx_n2] += (err * 4) // 42
-                    if x + 1 < w: data[idx_n2 + 1] += (err * 2) // 42
+                    if x + 1 < w: data[idx_n2 + 1] += (err * 5) // 42
                     if x + 2 < w: data[idx_n2 + 2] += (err * 1) // 42
 
-def dither_stucki(img):
+def dither_stucki(img, levels):
     w, h = img.size
     stride = w + 3
     buff = np.zeros((h + 3, stride), dtype=np.int16)
     img_arr = np.array(img, dtype=np.int16)
     buff[0:h, 1:w+1] = img_arr
     data = buff.flatten()
-    _stucki_loop(data, w, h, stride)
+    is_2bit = (len(levels) > 2)
+    _stucki_loop(data, w, h, stride, is_2bit)
     res_arr = data.reshape((h + 3, stride))
     final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
     return Image.fromarray(final_arr, 'L')
 
 @njit
-def _atkinson_loop(data, w, h, stride):
+def _atkinson_loop(data, w, h, stride, is_2bit):
     for y in range(h):
         row_start = y * stride
         for x in range(1, w + 1):
             idx = row_start + x
             old_val = data[idx]
-            if old_val < 42: new_val = 0
-            elif old_val < 127: new_val = 85
-            elif old_val < 212: new_val = 170
-            else: new_val = 255
+            if is_2bit:
+                if old_val < 42: new_val = 0
+                elif old_val < 127: new_val = 85
+                elif old_val < 212: new_val = 170
+                else: new_val = 255
+            else:
+                new_val = 0 if old_val < 128 else 255
             data[idx] = new_val
             err = old_val - new_val
             if err != 0:
@@ -275,19 +298,20 @@ def _atkinson_loop(data, w, h, stride):
                     data[idx_n + 1] += err8
                     data[idx_n + stride] += err8
 
-def dither_atkinson(img):
+def dither_atkinson(img, levels):
     w, h = img.size
     stride = w + 3
     buff = np.zeros((h + 3, stride), dtype=np.int16)
     img_arr = np.array(img, dtype=np.int16)
     buff[0:h, 1:w+1] = img_arr
     data = buff.flatten()
-    _atkinson_loop(data, w, h, stride)
+    is_2bit = (len(levels) > 2)
+    _atkinson_loop(data, w, h, stride, is_2bit)
     res_arr = data.reshape((h + 3, stride))
     final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
     return Image.fromarray(final_arr, 'L')
 
-def convert_to_xth(input_path, output_path, dither_algo='atkinson', gamma=1.0, invert=False, mode='cover', pad_color=255):
+def convert_image(input_path, output_path, dither_algo='atkinson', gamma=1.0, invert=False, mode='cover', pad_color=255, is_xtg=False):
     try:
         img = Image.open(input_path)
         if img.mode != 'L':
@@ -326,52 +350,70 @@ def convert_to_xth(input_path, output_path, dither_algo='atkinson', gamma=1.0, i
             lut = [int(((i / 255.0) ** gamma) * 255.0) for i in range(256)]
             result = result.point(lut)
 
+        levels = [0, 85, 170, 255] if not is_xtg else [0, 255]
+
         if dither_algo == 'atkinson':
-            result = dither_atkinson(result)
+            result = dither_atkinson(result, levels=levels)
         elif dither_algo == 'stucki':
-            result = dither_stucki(result)
+            result = dither_stucki(result, levels=levels)
         elif dither_algo == 'ostromoukhov':
-            result = dither_ostromoukhov(result)
+            result = dither_ostromoukhov(result, levels=levels)
         elif dither_algo == 'zhoufang':
-            result = dither_zhoufang(result)
+            result = dither_zhoufang(result, levels=levels)
         elif dither_algo == 'stochastic':
-            result = dither_stochastic(result)
+            result = dither_stochastic(result, levels=levels)
         elif dither_algo == 'floyd':
-            pal_img = Image.new("P", (1, 1))
-            pal_img.putpalette([0,0,0, 85,85,85, 170,170,170, 255,255,255] + [0,0,0]*252)
-            result_rgb = result.convert('RGB')
-            result = result_rgb.quantize(palette=pal_img, dither=Image.Dither.FLOYDSTEINBERG).convert('L')
+            if not is_xtg:
+                pal_img = Image.new("P", (1, 1))
+                pal_img.putpalette([0,0,0, 85,85,85, 170,170,170, 255,255,255] + [0,0,0]*252)
+                result_rgb = result.convert('RGB')
+                result = result_rgb.quantize(palette=pal_img, dither=Image.Dither.FLOYDSTEINBERG).convert('L')
+            else:
+                result = result.convert('1', dither=Image.Dither.FLOYDSTEINBERG).convert('L')
         else: # none
             lut = []
-            for i in range(256):
-                if i < 42: val = 0
-                elif i < 127: val = 85
-                elif i < 212: val = 170
-                else: val = 255
-                lut.append(val)
+            if not is_xtg:
+                for i in range(256):
+                    if i < 42: val = 0
+                    elif i < 127: val = 85
+                    elif i < 212: val = 170
+                    else: val = 255
+                    lut.append(val)
+            else:
+                for i in range(256):
+                    val = 0 if i < 128 else 255
+                    lut.append(val)
             result = result.point(lut)
 
-        # XTH Encoding (Vertical Scan Order)
-        w, h = TARGET_WIDTH, TARGET_HEIGHT
-        col_bytes = (h + 7) // 8
-        plane_size = col_bytes * w
-        plane0, plane1 = bytearray(plane_size), bytearray(plane_size)
-        pixels = result.load()
-        for x in range(w - 1, -1, -1):
-            col_idx = w - 1 - x
-            for y in range(h):
-                p = pixels[x, y]
-                if p >= 212: val = 0 # White
-                elif p >= 127: val = 1 # Light Gray
-                elif p >= 42: val = 2 # Dark Gray
-                else: val = 3 # Black
-                byte_idx = col_idx * col_bytes + (y // 8)
-                bit_idx = 7 - (y % 8)
-                if val & 1: plane0[byte_idx] |= (1 << bit_idx)
-                if val & 2: plane1[byte_idx] |= (1 << bit_idx)
+        if is_xtg:
+            # XTG Encoding (Horizontal Scan Order)
+            # Ensure 1-bit mode efficiently for standard tobytes()
+            xtg_img = result.point(lambda p: 255 if p >= 128 else 0).convert("1")
+            data = xtg_img.tobytes()
+            magic = b"XTG\x00"
+        else:
+            # XTH Encoding (Vertical Scan Order)
+            w, h = TARGET_WIDTH, TARGET_HEIGHT
+            col_bytes = (h + 7) // 8
+            plane_size = col_bytes * w
+            plane0, plane1 = bytearray(plane_size), bytearray(plane_size)
+            pixels = result.load()
+            for x in range(w - 1, -1, -1):
+                col_idx = w - 1 - x
+                for y in range(h):
+                    p = pixels[x, y]
+                    if p >= 212: val = 0 # White
+                    elif p >= 127: val = 1 # Light Gray
+                    elif p >= 42: val = 2 # Dark Gray
+                    else: val = 3 # Black
+                    byte_idx = col_idx * col_bytes + (y // 8)
+                    bit_idx = 7 - (y % 8)
+                    if val & 1: plane0[byte_idx] |= (1 << bit_idx)
+                    if val & 2: plane1[byte_idx] |= (1 << bit_idx)
+            data = plane0 + plane1
+            magic = b"XTH\x00"
 
-        data = plane0 + plane1
-        header = struct.pack("<4sHHBBI8s", b"XTH\x00", w, h, 0, 0, len(data), hashlib.md5(data).digest()[:8])
+        header = struct.pack("<4sHHBBI8s", magic, TARGET_WIDTH, TARGET_HEIGHT, 0, 0, len(data), hashlib.md5(data).digest()[:8])
         with open(output_path, "wb") as f:
             f.write(header)
             f.write(data)
@@ -383,13 +425,14 @@ def convert_to_xth(input_path, output_path, dither_algo='atkinson', gamma=1.0, i
 
 def main():
     print("=" * 60)
-    print("Image to 2-bit XTH Converter for XTEink X4")
+    print("Image to XTH/XTG Converter for XTEink X4")
     print("=" * 60)
     
     args = sys.argv[1:]
     if not args or "--help" in args or "-h" in args:
         print("\nUsage:")
-        print("  image2xth image.jpg                      # Default (Atkinson, Cover)")
+        print("  image2xth image.jpg                      # Default (2-bit XTH, Atkinson, Cover)")
+        print("  image2xth image.jpg --xtg                # Output 1-bit XTG file")
         print("  image2xth image.jpg --mode letterbox     # Scale to fit")
         print("  image2xth image.jpg --pad black          # Black padding")
         print("  image2xth image.jpg --dither floyd       # Floyd-Steinberg")
@@ -404,6 +447,7 @@ def main():
     dither_algo = DITHER_ALGO
     gamma = 1.0
     invert = "--invert" in args
+    is_xtg = "--xtg" in args
     mode = 'cover'
     pad_color = 255 # White
     
@@ -446,12 +490,14 @@ def main():
         print("Error: No valid input file or folder specified")
         return 1
     
+    ext_out = '.xtg' if is_xtg else '.xth'
+    
     if input_path.is_file():
-        convert_to_xth(input_path, input_path.with_suffix('.xth'), dither_algo, gamma, invert, mode, pad_color)
+        convert_image(input_path, input_path.with_suffix(ext_out), dither_algo, gamma, invert, mode, pad_color, is_xtg)
     else:
         for ext in SUPPORTED_FORMATS:
             for f in sorted(input_path.glob(f"*{ext}")):
-                convert_to_xth(f, f.with_suffix('.xth'), dither_algo, gamma, invert, mode, pad_color)
+                convert_image(f, f.with_suffix(ext_out), dither_algo, gamma, invert, mode, pad_color, is_xtg)
 
 if __name__ == "__main__":
     main()
