@@ -12,7 +12,7 @@ Tools for converting CBZ, PDF, and images to XTC/XTCH format for the XTEink X4 e
 ### 2. Install Required Libraries
 Open your terminal (Command Prompt on Windows, Terminal on macOS/Linux) and run:
 ```bash
-pip install pillow numpy numba pymupdf playwright
+pip install pillow numpy numba pymupdf playwright lz4
 ```
 
 ### 3. Web Support (For web2xtc.py)
@@ -96,6 +96,10 @@ python web2xtc.py 'https://example.com/' --viewport mobile --dynamic --parallel-
 ```bash
 python video2xtc.py video.mp4
 ```
+### xtc2xtcz.py
+```bash
+python xtc2xtcz.py xtc_output/
+```
 
 
 ## Tools
@@ -128,12 +132,16 @@ Converts a single image (like a wallpaper) to XTCH (2-bit grayscale) format.
 ### image2bw.py
 Converts a single image to 1-bit BMP format (perfect for fast-loading backgrounds).
 
+### xtc2xtcz.py
+Compresses existing `.xtc` and `.xtch` files into the LZ4-compressed `.xtcz` format to significantly reduce file sizes while maintaining fast decoding speeds on the device.
+
 ## Options Reference
 
 ### General Options (cbz2xtc, web2xtc, video2xtc)
 | Option | Effect |
 | :--- | :--- |
 | `--2bit` | Use 4-level grayscale (higher quality). |
+| `--compress` | Compress output using LZ4 into an `.xtcz` file. |
 | `--downscale bicubic` | Downscaling filter: bicubic (default), bilinear, box. |
 | `--manhwa <overlap>` | Use long-strip mode (default 40% overlap) for webtoons (cbz/web only). |
 | `--landscape-rtl` | Process wide pages from Right-to-Left (for Japanese manga). |

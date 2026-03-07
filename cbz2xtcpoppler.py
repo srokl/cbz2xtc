@@ -1412,6 +1412,36 @@ def convert_png_folder_to_xtc(png_folder, output_file, source_file=None):
         return False
 
 
+def compress_to_xtcz(input_path, output_path):
+    try:
+        import lz4.block
+    except ImportError:
+        print("  ✗ Error: lz4 not installed. Please run 'pip install lz4'")
+        return False
+        
+    block_size = 4096
+    try:
+        uncompressed_size = input_path.stat().st_size
+        with open(input_path, "rb") as f_in, open(output_path, "wb") as f_out:
+            f_out.write(struct.pack("<4sII", b"XTZ4", uncompressed_size, block_size))
+            while True:
+                chunk = f_in.read(block_size)
+                if not chunk:
+                    break
+                compressed = lz4.block.compress(chunk, store_size=False)
+                if len(compressed) >= len(chunk):
+                    descriptor = len(chunk) | 0x80000000
+                    f_out.write(struct.pack("<I", descriptor))
+                    f_out.write(chunk)
+                else:
+                    descriptor = len(compressed)
+                    f_out.write(struct.pack("<I", descriptor))
+                    f_out.write(compressed)
+        return True
+    except Exception as e:
+        print(f"  ✗ Compression error: {e}")
+        return False
+
 def process_file(file_path, output_dir, temp_dir, clean_temp, file_num=None, total_files=None):
     """
     Full pipeline: File (CBZ/PDF) → PNG → XTC
@@ -1437,6 +1467,16 @@ def process_file(file_path, output_dir, temp_dir, clean_temp, file_num=None, tot
     
     success = convert_png_folder_to_xtc(png_folder, output_file, source_file=file_path)
     
+    if success and COMPRESS:
+        xtcz_file = output_dir / f"{file_path.stem}.xtcz"
+        print(f"  Compressing to {xtcz_file.name}...", end=" ", flush=True)
+        if compress_to_xtcz(output_file, xtcz_file):
+            output_file.unlink()
+            output_file = xtcz_file
+            print(f"✓ ({xtcz_file.stat().st_size / 1024 / 1024:.1f}MB)")
+        else:
+            success = False
+
     # Step 3: Clean up temp files if requested
     if clean_temp and png_folder.exists():
         shutil.rmtree(png_folder)
@@ -1515,6 +1555,7 @@ def main():
         print("\n  --landscape-rtl   Process landscape spreads from Right to Left.")
         print("\n  --manhwa <overlap-percent>  Process as long-strip webtoon. Optionally set overlap percentage (default 40). Example: --manhwa 50")
         print("\n  --clean       Automatically delete temporary PNG files after conversion.")
+        print("\n  --compress    Compress output using LZ4 into an .xtcz file.")
         print("\n  --help, -h    Show this help message")
         return 0
     
@@ -1550,6 +1591,7 @@ def main():
     global LANDSCAPE_RTL
     global MANHWA
     global MANHWA_OVERLAP
+    global COMPRESS
     
     # New globals
     global XTC_MODE
@@ -1563,6 +1605,7 @@ def main():
     INVERT_COLORS = "--invert" in sys.argv
     LANDSCAPE_RTL = "--landscape-rtl" in sys.argv
     MANHWA = "--manhwa" in sys.argv
+    COMPRESS = "--compress" in sys.argv
     MANHWA_OVERLAP = 40
     
     if "--manhwa" in sys.argv:
@@ -1651,7 +1694,7 @@ def main():
     while i < len(sys.argv):
         arg = sys.argv[i]
         # Skip value args we already handled or boolean args
-        if arg in ["--dither", "--2bit", "--no-dither", "--clean", "--overlap", "--split-all", "--pad-black", "--include-overviews", "--sideways-overviews", "--gamma", "--invert", "--downscale"]:
+        if arg in ["--dither", "--2bit", "--no-dither", "--clean", "--overlap", "--split-all", "--pad-black", "--include-overviews", "--sideways-overviews", "--gamma", "--invert", "--downscale", "--compress"]:
             if arg == "--dither" or arg == "--gamma" or arg == "--downscale":
                  i += 1 # skip value
             # booleans are already handled

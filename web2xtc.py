@@ -1551,17 +1551,47 @@ def convert_png_folder_to_xtc(png_folder, output_file, source_file=None):
         return False
 
 
+def compress_to_xtcz(input_path, output_path):
+    try:
+        import lz4.block
+    except ImportError:
+        print("  ✗ Error: lz4 not installed. Please run 'pip install lz4'")
+        return False
+
+    block_size = 4096
+    try:
+        uncompressed_size = input_path.stat().st_size
+        with open(input_path, "rb") as f_in, open(output_path, "wb") as f_out:
+            f_out.write(struct.pack("<4sII", b"XTZ4", uncompressed_size, block_size))
+            while True:
+                chunk = f_in.read(block_size)
+                if not chunk:
+                    break
+                compressed = lz4.block.compress(chunk, store_size=False)
+                if len(compressed) >= len(chunk):
+                    descriptor = len(chunk) | 0x80000000
+                    f_out.write(struct.pack("<I", descriptor))
+                    f_out.write(chunk)
+                else:
+                    descriptor = len(compressed)
+                    f_out.write(struct.pack("<I", descriptor))
+                    f_out.write(compressed)
+        return True
+    except Exception as e:
+        print(f"  ✗ Compression error: {e}")
+        return False
+
 def process_file(input_obj, output_dir, temp_dir, clean_temp, file_num=None, total_files=None):
     progress_prefix = f"[{file_num}/{total_files}] " if file_num and total_files else ""
     is_url = str(input_obj).startswith('http')
-    
+
     if is_url:
         print(f"\n{progress_prefix}Processing URL: {input_obj}")
     else:
         print(f"\n{progress_prefix}Processing: {input_obj.name}")
-    
+
     start_time = time.time()
-    
+
     if is_url:
         png_folder = extract_url_to_png(input_obj, temp_dir)
         name = re.sub(r'[^a-zA-Z0-9]', '_', str(input_obj).split('//')[-1])[:30]
@@ -1574,15 +1604,24 @@ def process_file(input_obj, output_dir, temp_dir, clean_temp, file_num=None, tot
             return False, input_obj.name, 0
         else:
             return False, input_obj.name, 0
-        
+
     if not png_folder:
         return False, name, 0
-    
+
     ext = ".xtch" if XTC_MODE == "2bit" else ".xtc"
     output_file = output_dir / f"{name}{ext}"
-    
+
     success = convert_png_folder_to_xtc(png_folder, output_file)
-    
+
+    if success and COMPRESS:
+        xtcz_file = output_dir / f"{name}.xtcz"
+        print(f"  Compressing to {xtcz_file.name}...", end=" ", flush=True)
+        if compress_to_xtcz(output_file, xtcz_file):
+            output_file.unlink()
+            output_file = xtcz_file
+            print(f"✓ ({xtcz_file.stat().st_size / 1024 / 1024:.1f}MB)")
+        else:
+            success = False    
     if clean_temp and png_folder.exists():
         shutil.rmtree(png_folder)
     
@@ -1656,9 +1695,10 @@ def main():
         print("\n  --landscape-rtl   Process landscape spreads from Right to Left.")
         print("\n  --manhwa <overlap-percent>  Process as long-strip webtoon. Optionally set overlap percentage (default 40). Example: --manhwa 50")
         print("\n  --clean       Automatically delete temporary PNG files after conversion.")
+        print("\n  --compress    Compress output using LZ4 into an .xtcz file.")
         print("\n  --help, -h    Show this help message")
         return 0
-    
+
     # Parse globals
     global OVERLAP, SPLIT_SPREADS, SPLIT_SPREADS_PAGES, SPLIT_ALL, SKIP_ON, SKIP_PAGES, ONLY_ON, ONLY_PAGES
     global DONT_SPLIT, DONT_SPLIT_PAGES, CONTRAST_BOOST, CONTRAST_VALUE, MARGIN, MARGIN_VALUE
@@ -1666,14 +1706,14 @@ def main():
     global START_PAGE, STOP_PAGE, SAMPLE_SET, SAMPLE_PAGES
     global DESIRED_V_OVERLAP_SEGMENTS, SET_H_OVERLAP_SEGMENTS, MINIMUM_V_OVERLAP_PERCENT, SET_H_OVERLAP_PERCENT
     global MAX_SPLIT_WIDTH, PADDING_COLOR, LANDSCAPE_RTL, MANHWA, MANHWA_OVERLAP
-    global XTC_MODE, DITHER_ALGO, DOWNSCALE_FILTER, GAMMA_VALUE, INVERT_COLORS, VIEWPORT, COOKIES_FILE, DYNAMIC_MODE, PARALLEL_LINKS, WEBSITE_MODE
+    global XTC_MODE, DITHER_ALGO, DOWNSCALE_FILTER, GAMMA_VALUE, INVERT_COLORS, VIEWPORT, COOKIES_FILE, DYNAMIC_MODE, PARALLEL_LINKS, WEBSITE_MODE, COMPRESS
 
     clean_temp = "--clean" in sys.argv
     INVERT_COLORS = "--invert" in sys.argv
     LANDSCAPE_RTL = "--landscape-rtl" in sys.argv
     DYNAMIC_MODE = "--dynamic" in sys.argv
     PARALLEL_LINKS = "--parallel-links" in sys.argv
-    
+    COMPRESS = "--compress" in sys.argv    
     MANHWA_OVERLAP = 40
     if "--manhwa" in sys.argv:
         try:
@@ -1775,9 +1815,10 @@ def main():
         arg = sys.argv[i]
         if arg == "--contrast-boost": CONTRAST_VALUE = sys.argv[i+1]
         elif arg == "--margin": MARGIN_VALUE = sys.argv[i+1]
-        elif arg == "--vsplit-target": 
+        elif arg == "--vsplit-target":
             OVERLAP = True; DESIRED_V_OVERLAP_SEGMENTS = int(sys.argv[i+1])
         elif arg == "--cookies": pass
+        elif arg == "--compress": pass
         elif arg == "--manhwa":
             if i+1 < len(sys.argv) and not sys.argv[i+1].startswith("--"):
                  i += 1
