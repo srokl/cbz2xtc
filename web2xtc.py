@@ -758,9 +758,12 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
         # Handle landscape images (Spreads)
         is_landscape = width >= height
 
-        # We split most pages that are vertical. 
+        # We split most pages that are vertical.
         should_this_split = True if not is_solid else False
-        
+
+        if is_landscape and LANDSCAPE_PAGE_SPLIT == 'none':
+            should_this_split = False
+
         if str(page_num) in SPLIT_SPREADS_PAGES:
             if suffix == "":  
                 # we haven't recursed, this is top level.
@@ -835,7 +838,7 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                 # In rotated image (-90), Top (v=0) is Left, Bottom (v=max) is Right.
                 v_list = list(range(number_of_v_segments))
                 # Default is LTR (Left then Right). RTL flag reverses this.
-                is_rtl = LANDSCAPE_RTL and not MANHWA
+                is_rtl = (LANDSCAPE_PAGE_SPLIT == 'rtl') and not MANHWA
                 if is_rtl:
                     v_list.reverse() # RTL: Left then Right (Swapped)
 
@@ -868,7 +871,7 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                 part2_rotated = part2.rotate(rot, expand=True)
                 
                 # Default is LTR. RTL reverses this for landscape.
-                is_rtl = LANDSCAPE_RTL and not MANHWA
+                is_rtl = (LANDSCAPE_PAGE_SPLIT == 'rtl') and not MANHWA
                 if is_landscape:
                     if is_rtl:
                         # RTL: Left (part2) then Right (part1)
@@ -1517,8 +1520,8 @@ def convert_png_folder_to_xtc(png_folder, output_file, source_file=None):
     for orig_page in sorted(page_ranges.keys()):
         entry = page_ranges[orig_page]
         
-        # Apply +3 page offset for chapters (User request) - Mobile Viewport Only
-        if VIEWPORT == "mobile":
+        # Apply +3 page offset for chapters (User request) - Dynamic Mobile Only
+        if DYNAMIC_MODE and VIEWPORT == "mobile":
             start_val = min(entry['start'] + 3, total_files)
             end_val = min(entry['end'] + 3, total_files)
         else:
@@ -1691,7 +1694,7 @@ def main():
         print("\n  --vsplit-target <#>   try to split page vertically into # segments.")
         print("\n  --vsplit-min-overlap <float>   minimum vertical overlap between segments.")
         print("\n  --sample-set <pagenum> ...  Build a spread of contrast samples.")
-        print("\n  --landscape-rtl   Process landscape spreads from Right to Left.")
+        print("\n  --landscape-page-split <none|ltr|rtl>   Split wide pages (default: none).")
         print("\n  --manhwa <overlap-percent>  Process as long-strip webtoon. Optionally set overlap percentage (default 40). Example: --manhwa 50")
         print("\n  --clean       Automatically delete temporary PNG files after conversion.")
         print("\n  --compress    Compress output using LZ4 into an .xtcz file.")
@@ -1704,16 +1707,29 @@ def main():
     global INCLUDE_OVERVIEWS, SIDEWAYS_OVERVIEWS, SELECT_OVERVIEWS, SELECT_OV_PAGES
     global START_PAGE, STOP_PAGE, SAMPLE_SET, SAMPLE_PAGES
     global DESIRED_V_OVERLAP_SEGMENTS, SET_H_OVERLAP_SEGMENTS, MINIMUM_V_OVERLAP_PERCENT, SET_H_OVERLAP_PERCENT
-    global MAX_SPLIT_WIDTH, PADDING_COLOR, LANDSCAPE_RTL, MANHWA, MANHWA_OVERLAP
+    global MAX_SPLIT_WIDTH, PADDING_COLOR, LANDSCAPE_PAGE_SPLIT, MANHWA, MANHWA_OVERLAP
     global XTC_MODE, DITHER_ALGO, DOWNSCALE_FILTER, GAMMA_VALUE, INVERT_COLORS, VIEWPORT, COOKIES_FILE, DYNAMIC_MODE, PARALLEL_LINKS, WEBSITE_MODE, COMPRESS
 
     clean_temp = "--clean" in sys.argv
     INVERT_COLORS = "--invert" in sys.argv
-    LANDSCAPE_RTL = "--landscape-rtl" in sys.argv
     DYNAMIC_MODE = "--dynamic" in sys.argv
     PARALLEL_LINKS = "--parallel-links" in sys.argv
     COMPRESS = "--compress" in sys.argv    
     MANHWA_OVERLAP = 40
+    LANDSCAPE_PAGE_SPLIT = 'none'
+
+    if "--landscape-page-split" in sys.argv:
+        try:
+            idx = sys.argv.index("--landscape-page-split")
+            if idx + 1 < len(sys.argv) and not sys.argv[idx+1].startswith("--"):
+                val = sys.argv[idx + 1].lower()
+                if val in ['none', 'ltr', 'rtl']:
+                    LANDSCAPE_PAGE_SPLIT = val
+                else:
+                    print(f"Warning: Unknown value '{val}' for --landscape-page-split, using default 'none'")
+        except (ValueError, IndexError):
+            print("Warning: --landscape-page-split flag missing value, using default 'none'")
+
     if "--manhwa" in sys.argv:
         try:
             idx = sys.argv.index("--manhwa")

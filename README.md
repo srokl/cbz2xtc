@@ -65,7 +65,7 @@ Open your terminal (Command Prompt on Windows, Terminal on macOS/Linux) and run:
 The default is xtc 1-bit.
 - for 2-bit manga
 ```bash
-python cbz2xtc.py --2bit --landscape-rtl --sideways-overviews --downscale bicubic
+python cbz2xtc.py --2bit --landscape-page-split rtl --sideways-overviews --downscale bicubic
 ```
 - for manhwa
 ```bash
@@ -144,7 +144,7 @@ Compresses existing `.xtc` and `.xtch` files into the LZ4-compressed `.xtcz` for
 | `--compress` | Compress output using LZ4 into an `.xtcz` file. |
 | `--downscale bicubic` | Downscaling filter: bicubic (default), bilinear, box. |
 | `--manhwa <overlap>` | Use long-strip mode (default 40% overlap) for webtoons (cbz/web only). |
-| `--landscape-rtl` | Process wide pages from Right-to-Left (for Japanese manga). |
+| `--landscape-page-split <none|ltr|rtl>` | Split wide pages. Default is none (overview only). `rtl` for Japanese manga. |
 | `--include-overviews` | Add an upright full-page preview before segments. |
 | `--sideways-overviews` | Add a rotated full-page preview (-90 degrees). |
 | `--gamma 0.7` | Brighten the image (use values like 0.5 to 0.9). |

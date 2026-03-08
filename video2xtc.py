@@ -588,7 +588,7 @@ def process_file(file_path, output_dir, temp_dir, clean_temp, file_num, total_fi
 
 def main():
     print("=" * 60)
-    print("Video to XTC Converter for XTEink X4")
+    print("Video to XTC/XTCH Converter for XTEink X4")
     print("=" * 60)
     
     if "--help" in sys.argv or "-h" in sys.argv:
