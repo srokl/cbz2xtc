@@ -1,6 +1,38 @@
 # XTEink Manga Tools
 
 Tools for converting CBZ, PDF, and images to XTC/XTCH format for the XTEink X4 e-reader.
+## Tools
+
+### cbz2xtc.py
+Processes multiple pages and files in parallel.
+- **Split segments**: Automatically cuts landscape spreads into upright portrait pieces.
+- **Overviews**: Generates full-page views to show the layout before the splits.
+- **Fast Encoding**: Uses NumPy to process images quickly.
+
+### cbz2xtcpoppler.py
+An alternative PDF converter that uses Poppler for potentially better rendering on some PDFs.
+
+### web2xtc.py
+Converts websites directly to XTC/XTCH format.
+- **Full Page Capture**: Screenshots the entire scrolling page.
+- **Dynamic Mode**: Expands dropdowns and crawls links (chapters/sub-pages).
+- **Mobile/Desktop**: Mobile or Desktop viewport.
+
+### video2xtc.py
+Converts video files (MP4, MKV, AVI, etc.) to XTC/XTCH format.
+- **FPS Control**: Extract frames at a custom rate (e.g., 1 frame per second).
+- **Auto-Rotation**: Automatically rotates landscape videos to fit the portrait screen.
+- **High Performance**: Uses FFmpeg for extraction and Numba for fast dithering.
+
+### image2xth.py
+Converts a single image (like a wallpaper) to XTCH (2-bit grayscale) format.
+- Supports **Cover**, **Letterbox**, and **Fill** modes.
+
+### image2bw.py
+Converts a single image to 1-bit BMP format (perfect for fast-loading backgrounds).
+
+### xtc2xtcz.py
+Compresses existing `.xtc` and `.xtch` files into the LZ4-compressed `.xtcz` format to significantly reduce file sizes while maintaining fast decoding speeds on the device.
 
 ## Installation
 
@@ -59,6 +91,37 @@ python3 web2xtc.py "https://example.com/manga" <options>
 ```bash
 python3 video2xtc.py movie.mp4 <options>
 ```
+
+## Options Reference
+
+### General Options (cbz2xtc, web2xtc, video2xtc)
+| Option | Effect |
+| :--- | :--- |
+| `--2bit` | Use 4-level grayscale (higher quality). |
+| `--compress` | Compress output using LZ4 into an `.xtcz` file. |
+| `--downscale bicubic` | Downscaling filter: bicubic (default), bilinear, box. |
+| `--manhwa <overlap>` | Use long-strip mode (default 40% overlap) for webtoons (cbz/web only). |
+| `--landscape-page-split <none, ltr, rtl>` | Split wide pages. Default is none (overview only). `rtl` for Japanese manga. |
+| `--include-overviews` | Add an upright full-page preview before segments. |
+| `--sideways-overviews` | Add a rotated full-page preview (-90 degrees). |
+| `--gamma 1` | Brighten/Darken the image (use value like <1 to brighten and 1> to darken). |
+| `--clean` | Delete temporary files after the conversion is done. |
+| `--dither zhoufang` | Dithering: stucki(default), atkinson, ostromoukhov, zhoufang(recommended), stochastic, floyd, ordered, none. |
+
+### Video Options (video2xtc.py only)
+| Option | Effect |
+| :--- | :--- |
+| `--fps 1.0` | Frames per second to extract (Default: 1.0). |
+| `--invert` | Invert colors (White <-> Black). |
+
+### Web Options (web2xtc.py only)
+| Option | Effect |
+| :--- | :--- |
+| `--dynamic` | Expands menus and crawls 1st-page links (chapters). |
+| `--parallel-links` | Crawls sub-links in parallel (faster). |
+| `--viewport mobile` | Use mobile layout (iPhone 13 Pro). Default is desktop. |
+| `--cookies file.txt` | Load cookies from a Netscape-formatted file. |
+
 ## CLI Examples
 Open your terminal (Command Prompt on Windows, Terminal on macOS/Linux) and run:
 ### cbz2xtc.py or cbz2xtcpoppler.py
@@ -100,70 +163,6 @@ python video2xtc.py video.mp4
 ```bash
 python xtc2xtcz.py xtc_output/
 ```
-
-
-## Tools
-
-### cbz2xtc.py
-Processes multiple pages and files in parallel.
-- **Split segments**: Automatically cuts landscape spreads into upright portrait pieces.
-- **Overviews**: Generates full-page views to show the layout before the splits.
-- **Fast Encoding**: Uses NumPy to process images quickly.
-
-### cbz2xtcpoppler.py
-An alternative PDF converter that uses Poppler for potentially better rendering on some PDFs.
-
-### web2xtc.py
-Converts websites directly to XTC/XTCH format.
-- **Full Page Capture**: Screenshots the entire scrolling page.
-- **Dynamic Mode**: Expands dropdowns and crawls links (chapters/sub-pages).
-- **Mobile/Desktop**: Mobile or Desktop viewport.
-
-### video2xtc.py
-Converts video files (MP4, MKV, AVI, etc.) to XTC/XTCH format.
-- **FPS Control**: Extract frames at a custom rate (e.g., 1 frame per second).
-- **Auto-Rotation**: Automatically rotates landscape videos to fit the portrait screen.
-- **High Performance**: Uses FFmpeg for extraction and Numba for fast dithering.
-
-### image2xth.py
-Converts a single image (like a wallpaper) to XTCH (2-bit grayscale) format.
-- Supports **Cover**, **Letterbox**, and **Fill** modes.
-
-### image2bw.py
-Converts a single image to 1-bit BMP format (perfect for fast-loading backgrounds).
-
-### xtc2xtcz.py
-Compresses existing `.xtc` and `.xtch` files into the LZ4-compressed `.xtcz` format to significantly reduce file sizes while maintaining fast decoding speeds on the device.
-
-## Options Reference
-
-### General Options (cbz2xtc, web2xtc, video2xtc)
-| Option | Effect |
-| :--- | :--- |
-| `--2bit` | Use 4-level grayscale (higher quality). |
-| `--compress` | Compress output using LZ4 into an `.xtcz` file. |
-| `--downscale bicubic` | Downscaling filter: bicubic (default), bilinear, box. |
-| `--manhwa <overlap>` | Use long-strip mode (default 40% overlap) for webtoons (cbz/web only). |
-| `--landscape-page-split <none, ltr, rtl>` | Split wide pages. Default is none (overview only). `rtl` for Japanese manga. |
-| `--include-overviews` | Add an upright full-page preview before segments. |
-| `--sideways-overviews` | Add a rotated full-page preview (-90 degrees). |
-| `--gamma 1` | Brighten/Darken the image (use value like <1 to brighten and 1> to darken). |
-| `--clean` | Delete temporary files after the conversion is done. |
-| `--dither zhoufang` | Dithering: stucki(default), atkinson, ostromoukhov, zhoufang(recommended), stochastic, floyd, ordered, none. |
-
-### Video Options (video2xtc.py only)
-| Option | Effect |
-| :--- | :--- |
-| `--fps 1.0` | Frames per second to extract (Default: 1.0). |
-| `--invert` | Invert colors (White <-> Black). |
-
-### Web Options (web2xtc.py only)
-| Option | Effect |
-| :--- | :--- |
-| `--dynamic` | Expands menus and crawls 1st-page links (chapters). |
-| `--parallel-links` | Crawls sub-links in parallel (faster). |
-| `--viewport mobile` | Use mobile layout (iPhone 13 Pro). Default is desktop. |
-| `--cookies file.txt` | Load cookies from a Netscape-formatted file. |
 
 ## Visual Samples
 
