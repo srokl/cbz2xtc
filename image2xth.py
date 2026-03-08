@@ -143,25 +143,26 @@ def _zhoufang_loop(data, w, h, stride, is_2bit):
             data[idx] = new_val
             err = old_val - new_val
             if err != 0:
+                e = err / 103.0
                 # Row 1
-                if x + 1 < w: data[idx + 1] += (err * 16) // 103
-                if x + 2 < w: data[idx + 2] += (err * 9) // 103
+                if x + 1 <= w: data[idx + 1] += int(e * 16)
+                if x + 2 <= w: data[idx + 2] += int(e * 9)
                 # Row 2
                 idx_n = idx + stride
                 if idx_n < len(data):
-                    if x - 2 > 0: data[idx_n - 2] += (err * 5) // 103
-                    if x - 1 > 0: data[idx_n - 1] += (err * 11) // 103
-                    data[idx_n] += (err * 16) // 103
-                    if x + 1 < w: data[idx_n + 1] += (err * 11) // 103
-                    if x + 2 < w: data[idx_n + 2] += (err * 5) // 103
+                    if x - 2 >= 1: data[idx_n - 2] += int(e * 5)
+                    if x - 1 >= 1: data[idx_n - 1] += int(e * 11)
+                    data[idx_n] += int(e * 16)
+                    if x + 1 <= w: data[idx_n + 1] += int(e * 11)
+                    if x + 2 <= w: data[idx_n + 2] += int(e * 5)
                 # Row 3
                 idx_n2 = idx + (stride * 2)
                 if idx_n2 < len(data):
-                    if x - 2 > 0: data[idx_n2 - 2] += (err * 3) // 103
-                    if x - 1 > 0: data[idx_n2 - 1] += (err * 5) // 103
-                    data[idx_n2] += (err * 9) // 103
-                    if x + 1 < w: data[idx_n2 + 1] += (err * 5) // 103
-                    if x + 2 < w: data[idx_n2 + 2] += (err * 3) // 103
+                    if x - 2 >= 1: data[idx_n2 - 2] += int(e * 3)
+                    if x - 1 >= 1: data[idx_n2 - 1] += int(e * 5)
+                    data[idx_n2] += int(e * 9)
+                    if x + 1 <= w: data[idx_n2 + 1] += int(e * 5)
+                    if x + 2 <= w: data[idx_n2 + 2] += int(e * 3)
 
 def dither_zhoufang(img, levels):
     w, h = img.size
@@ -205,10 +206,10 @@ def _ostromoukhov_loop(data, w, h, stride, is_2bit):
                     d2 = 0.4 * (1 - t) + 0.2 * t
                     d3 = 0.3 * (1 - t) + 0.1 * t
                 
-                if x + 1 < w: data[idx + 1] += int(err * d1)
+                if x + 1 <= w: data[idx + 1] += int(err * d1)
                 idx_n = idx + stride
                 if idx_n < len(data):
-                    if x - 1 > 0: data[idx_n - 1] += int(err * d2)
+                    if x - 1 >= 1: data[idx_n - 1] += int(err * d2)
                     data[idx_n] += int(err * d3)
 
 def dither_ostromoukhov(img, levels):
@@ -231,6 +232,7 @@ def _stucki_loop(data, w, h, stride, is_2bit):
         for x in range(1, w + 1):
             idx = row_start + x
             old_val = data[idx]
+            
             if is_2bit:
                 if old_val < 42: new_val = 0
                 elif old_val < 127: new_val = 85
@@ -238,25 +240,31 @@ def _stucki_loop(data, w, h, stride, is_2bit):
                 else: new_val = 255
             else:
                 new_val = 0 if old_val < 128 else 255
+            
             data[idx] = new_val
             err = old_val - new_val
+            
             if err != 0:
-                if x + 1 < w: data[idx + 1] += (err * 8) // 42
-                if x + 2 < w: data[idx + 2] += (err * 4) // 42
+                e = err / 42.0
+                # Row 1
+                if x + 1 <= w: data[idx + 1] += int(e * 8)
+                if x + 2 <= w: data[idx + 2] += int(e * 4)
+                # Row 2
                 idx_n = idx + stride
                 if idx_n < len(data):
-                    if x - 2 > 0: data[idx_n - 2] += (err * 2) // 42
-                    if x - 1 > 0: data[idx_n - 1] += (err * 4) // 42
-                    data[idx_n] += (err * 8) // 42
-                    if x + 1 < w: data[idx_n + 1] += (err * 4) // 42
-                    if x + 2 < w: data[idx_n + 2] += (err * 2) // 42
+                    if x - 2 >= 1: data[idx_n - 2] += int(e * 2)
+                    if x - 1 >= 1: data[idx_n - 1] += int(e * 4)
+                    data[idx_n] += int(e * 8)
+                    if x + 1 <= w: data[idx_n + 1] += int(e * 4)
+                    if x + 2 <= w: data[idx_n + 2] += int(e * 2)
+                # Row 3
                 idx_n2 = idx + (stride * 2)
                 if idx_n2 < len(data):
-                    if x - 2 > 0: data[idx_n2 - 2] += (err * 1) // 42
-                    if x - 1 > 0: data[idx_n2 - 1] += (err * 2) // 42
-                    data[idx_n2] += (err * 4) // 42
-                    if x + 1 < w: data[idx_n2 + 1] += (err * 5) // 42
-                    if x + 2 < w: data[idx_n2 + 2] += (err * 1) // 42
+                    if x - 2 >= 1: data[idx_n2 - 2] += int(e * 1)
+                    if x - 1 >= 1: data[idx_n2 - 1] += int(e * 2)
+                    data[idx_n2] += int(e * 4)
+                    if x + 1 <= w: data[idx_n2 + 1] += int(e * 2)
+                    if x + 2 <= w: data[idx_n2 + 2] += int(e * 1)
 
 def dither_stucki(img, levels):
     w, h = img.size
@@ -278,6 +286,7 @@ def _atkinson_loop(data, w, h, stride, is_2bit):
         for x in range(1, w + 1):
             idx = row_start + x
             old_val = data[idx]
+            
             if is_2bit:
                 if old_val < 42: new_val = 0
                 elif old_val < 127: new_val = 85
@@ -285,18 +294,25 @@ def _atkinson_loop(data, w, h, stride, is_2bit):
                 else: new_val = 255
             else:
                 new_val = 0 if old_val < 128 else 255
+            
             data[idx] = new_val
             err = old_val - new_val
+            
             if err != 0:
-                err8 = err >> 3
+                err8 = int(err / 8.0)
                 if err8 != 0:
-                    data[idx + 1] += err8
-                    data[idx + 2] += err8
+                    if x + 1 <= w: data[idx + 1] += err8
+                    if x + 2 <= w: data[idx + 2] += err8
+                    
                     idx_n = idx + stride
-                    data[idx_n - 1] += err8
-                    data[idx_n]     += err8
-                    data[idx_n + 1] += err8
-                    data[idx_n + stride] += err8
+                    if idx_n < len(data):
+                        if x - 1 >= 1: data[idx_n - 1] += err8
+                        data[idx_n] += err8
+                        if x + 1 <= w: data[idx_n + 1] += err8
+                    
+                    idx_n2 = idx + (stride * 2)
+                    if idx_n2 < len(data):
+                        data[idx_n2] += err8
 
 def dither_atkinson(img, levels):
     w, h = img.size

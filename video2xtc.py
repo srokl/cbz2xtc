@@ -138,24 +138,26 @@ def _zhoufang_loop(data, w, h, stride, is_2bit):
             data[idx] = new_val
             err = old_val - new_val
             if err != 0:
-                e = err / 103
-                if x + 1 < w: data[idx + 1] += int(e * 16)
-                if x + 2 < w: data[idx + 2] += int(e * 9)
+                e = err / 103.0
+                # Row 1
+                if x + 1 <= w: data[idx + 1] += int(e * 16)
+                if x + 2 <= w: data[idx + 2] += int(e * 9)
+                # Row 2
                 idx_n = idx + stride
                 if idx_n < len(data):
-                    if x - 2 > 0: data[idx_n - 2] += int(e * 5)
-                    if x - 1 > 0: data[idx_n - 1] += int(e * 11)
+                    if x - 2 >= 1: data[idx_n - 2] += int(e * 5)
+                    if x - 1 >= 1: data[idx_n - 1] += int(e * 11)
                     data[idx_n] += int(e * 16)
-                    if x + 1 < w: data[idx_n + 1] += int(e * 11)
-                    if x + 2 < w: data[idx_n + 2] += int(e * 5)
+                    if x + 1 <= w: data[idx_n + 1] += int(e * 11)
+                    if x + 2 <= w: data[idx_n + 2] += int(e * 5)
                 # Row 3
                 idx_n2 = idx + (stride * 2)
                 if idx_n2 < len(data):
-                    if x - 2 > 0: data[idx_n2 - 2] += int(e * 1)
-                    if x - 1 > 0: data[idx_n2 - 1] += int(e * 5)
+                    if x - 2 >= 1: data[idx_n2 - 2] += int(e * 3)
+                    if x - 1 >= 1: data[idx_n2 - 1] += int(e * 5)
                     data[idx_n2] += int(e * 9)
-                    if x + 1 < w: data[idx_n2 + 1] += int(e * 5)
-                    if x + 2 < w: data[idx_n2 + 2] += int(e * 3)
+                    if x + 1 <= w: data[idx_n2 + 1] += int(e * 5)
+                    if x + 2 <= w: data[idx_n2 + 2] += int(e * 3)
 
 def dither_zhoufang(img, levels):
     w, h = img.size
@@ -187,11 +189,6 @@ def _ostromoukhov_loop(data, w, h, stride, is_2bit):
             data[idx] = new_val
             err = old_val - new_val
             if err != 0:
-                # Variable coefficients based on input intensity
-                # Simplified 3-point piecewise linear interpolation
-                # 0/255: [0.7, 0.2, 0.1]
-                # 128:   [0.3, 0.4, 0.3]
-                
                 v = max(0, min(255, old_val))
                 if v <= 128:
                     t = v / 128.0
@@ -204,16 +201,10 @@ def _ostromoukhov_loop(data, w, h, stride, is_2bit):
                     d2 = 0.4 * (1 - t) + 0.2 * t
                     d3 = 0.3 * (1 - t) + 0.1 * t
                 
-                # Distribute error
-                # d1: Right (x+1)
-                # d2: Down-Left (x-1, y+1)
-                # d3: Down (x, y+1)
-                
-                if x + 1 < w: data[idx + 1] += int(err * d1)
-                
+                if x + 1 <= w: data[idx + 1] += int(err * d1)
                 idx_n = idx + stride
                 if idx_n < len(data):
-                    if x - 1 > 0: data[idx_n - 1] += int(err * d2)
+                    if x - 1 >= 1: data[idx_n - 1] += int(err * d2)
                     data[idx_n] += int(err * d3)
 
 def dither_ostromoukhov(img, levels):
@@ -236,6 +227,7 @@ def _stucki_loop(data, w, h, stride, is_2bit):
         for x in range(1, w + 1):
             idx = row_start + x
             old_val = data[idx]
+            
             if is_2bit:
                 if old_val < 42: new_val = 0
                 elif old_val < 127: new_val = 85
@@ -243,28 +235,31 @@ def _stucki_loop(data, w, h, stride, is_2bit):
                 else: new_val = 255
             else:
                 new_val = 0 if old_val < 128 else 255
+            
             data[idx] = new_val
             err = old_val - new_val
+            
             if err != 0:
+                e = err / 42.0
                 # Row 1
-                if x + 1 < w: data[idx + 1] += (err * 8) // 42
-                if x + 2 < w: data[idx + 2] += (err * 4) // 42
+                if x + 1 <= w: data[idx + 1] += int(e * 8)
+                if x + 2 <= w: data[idx + 2] += int(e * 4)
                 # Row 2
                 idx_n = idx + stride
                 if idx_n < len(data):
-                    if x - 2 > 0: data[idx_n - 2] += (err * 2) // 42
-                    if x - 1 > 0: data[idx_n - 1] += (err * 4) // 42
-                    data[idx_n] += (err * 8) // 42
-                    if x + 1 < w: data[idx_n + 1] += (err * 4) // 42
-                    if x + 2 < w: data[idx_n + 2] += (err * 2) // 42
+                    if x - 2 >= 1: data[idx_n - 2] += int(e * 2)
+                    if x - 1 >= 1: data[idx_n - 1] += int(e * 4)
+                    data[idx_n] += int(e * 8)
+                    if x + 1 <= w: data[idx_n + 1] += int(e * 4)
+                    if x + 2 <= w: data[idx_n + 2] += int(e * 2)
                 # Row 3
                 idx_n2 = idx + (stride * 2)
                 if idx_n2 < len(data):
-                    if x - 2 > 0: data[idx_n2 - 2] += (err * 1) // 42
-                    if x - 1 > 0: data[idx_n2 - 1] += (err * 2) // 42
-                    data[idx_n2] += (err * 4) // 42
-                    if x + 1 < w: data[idx_n2 + 1] += (err * 2) // 42
-                    if x + 2 < w: data[idx_n2 + 2] += (err * 1) // 42
+                    if x - 2 >= 1: data[idx_n2 - 2] += int(e * 1)
+                    if x - 1 >= 1: data[idx_n2 - 1] += int(e * 2)
+                    data[idx_n2] += int(e * 4)
+                    if x + 1 <= w: data[idx_n2 + 1] += int(e * 2)
+                    if x + 2 <= w: data[idx_n2 + 2] += int(e * 1)
 
 def dither_stucki(img, levels):
     w, h = img.size
@@ -286,6 +281,7 @@ def _atkinson_loop(data, w, h, stride, is_2bit):
         for x in range(1, w + 1):
             idx = row_start + x
             old_val = data[idx]
+            
             if is_2bit:
                 if old_val < 42: new_val = 0
                 elif old_val < 127: new_val = 85
@@ -293,18 +289,25 @@ def _atkinson_loop(data, w, h, stride, is_2bit):
                 else: new_val = 255
             else:
                 new_val = 0 if old_val < 128 else 255
+            
             data[idx] = new_val
             err = old_val - new_val
+            
             if err != 0:
-                err8 = err >> 3
+                err8 = int(err / 8.0)
                 if err8 != 0:
-                    data[idx + 1] += err8
-                    data[idx + 2] += err8
+                    if x + 1 <= w: data[idx + 1] += err8
+                    if x + 2 <= w: data[idx + 2] += err8
+                    
                     idx_n = idx + stride
-                    data[idx_n - 1] += err8
-                    data[idx_n] += err8
-                    data[idx_n + 1] += err8
-                    data[idx_n + stride] += err8
+                    if idx_n < len(data):
+                        if x - 1 >= 1: data[idx_n - 1] += err8
+                        data[idx_n] += err8
+                        if x + 1 <= w: data[idx_n + 1] += err8
+                    
+                    idx_n2 = idx + (stride * 2)
+                    if idx_n2 < len(data):
+                        data[idx_n2] += err8
 
 def dither_atkinson(img, levels):
     w, h = img.size
@@ -523,6 +526,36 @@ def extract_video_frames(video_path, temp_dir):
         print(f"  ✗ Error: {e}")
         return None
 
+def compress_to_xtcz(input_path, output_path):
+    try:
+        import lz4.block
+    except ImportError:
+        print("  ✗ Error: lz4 not installed. Please run 'pip install lz4'")
+        return False
+        
+    block_size = 4096
+    try:
+        uncompressed_size = input_path.stat().st_size
+        with open(input_path, "rb") as f_in, open(output_path, "wb") as f_out:
+            f_out.write(struct.pack("<4sII", b"XTZ4", uncompressed_size, block_size))
+            while True:
+                chunk = f_in.read(block_size)
+                if not chunk:
+                    break
+                compressed = lz4.block.compress(chunk, store_size=False)
+                if len(compressed) >= len(chunk):
+                    descriptor = len(chunk) | 0x80000000
+                    f_out.write(struct.pack("<I", descriptor))
+                    f_out.write(chunk)
+                else:
+                    descriptor = len(compressed)
+                    f_out.write(struct.pack("<I", descriptor))
+                    f_out.write(compressed)
+        return True
+    except Exception as e:
+        print(f"  ✗ Compression error: {e}")
+        return False
+
 def process_file(file_path, output_dir, temp_dir, clean_temp, file_num, total_files):
     print(f"\n[{file_num}/{total_files}] Processing: {file_path.name}")
     start_time = time.time()
@@ -536,6 +569,16 @@ def process_file(file_path, output_dir, temp_dir, clean_temp, file_num, total_fi
     png_files = sorted(png_folder.glob("*.png"))
     success = build_xtc_internal(png_files, output_file, mode=XTC_MODE)
     
+    if success and COMPRESS:
+        xtcz_file = output_dir / f"{file_path.stem}.xtcz"
+        print(f"  Compressing to {xtcz_file.name}...", end=" ", flush=True)
+        if compress_to_xtcz(output_file, xtcz_file):
+            output_file.unlink()
+            output_file = xtcz_file
+            print(f"✓ ({xtcz_file.stat().st_size / 1024 / 1024:.1f}MB)")
+        else:
+            success = False
+
     if clean_temp:
         shutil.rmtree(png_folder)
         
@@ -557,12 +600,14 @@ def main():
         print("  --gamma <float>  Brightness (default 1.0)")
         print("  --invert         Invert colors")
         print("  --clean          Delete temp files")
+        print("  --compress       Compress output using LZ4 into an .xtcz file")
         return 0
 
-    global XTC_MODE, DITHER_ALGO, GAMMA_VALUE, INVERT_COLORS, FPS_VALUE
+    global XTC_MODE, DITHER_ALGO, GAMMA_VALUE, INVERT_COLORS, FPS_VALUE, COMPRESS
     
     clean_temp = "--clean" in sys.argv
     INVERT_COLORS = "--invert" in sys.argv
+    COMPRESS = "--compress" in sys.argv
     
     if "--2bit" in sys.argv: XTC_MODE = "2bit"
     
@@ -570,7 +615,9 @@ def main():
     files = []
     while i < len(sys.argv):
         arg = sys.argv[i]
-        if arg == "--dither":
+        if arg == "--compress":
+            pass
+        elif arg == "--dither":
             DITHER_ALGO = sys.argv[i+1]
             i += 1
         elif arg == "--gamma":
