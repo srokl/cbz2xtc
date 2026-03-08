@@ -144,18 +144,18 @@ Compresses existing `.xtc` and `.xtch` files into the LZ4-compressed `.xtcz` for
 | `--compress` | Compress output using LZ4 into an `.xtcz` file. |
 | `--downscale bicubic` | Downscaling filter: bicubic (default), bilinear, box. |
 | `--manhwa <overlap>` | Use long-strip mode (default 40% overlap) for webtoons (cbz/web only). |
-| `--landscape-page-split <none|ltr|rtl>` | Split wide pages. Default is none (overview only). `rtl` for Japanese manga. |
+| `--landscape-page-split <none, ltr, rtl>` | Split wide pages. Default is none (overview only). `rtl` for Japanese manga. |
 | `--include-overviews` | Add an upright full-page preview before segments. |
 | `--sideways-overviews` | Add a rotated full-page preview (-90 degrees). |
-| `--gamma 0.7` | Brighten the image (use values like 0.5 to 0.9). |
+| `--gamma 1` | Brighten/Darken the image (use value like <1 to brighten and 1> to darken). |
 | `--clean` | Delete temporary files after the conversion is done. |
+| `--dither zhoufang` | Dithering: stucki(default), atkinson, ostromoukhov, zhoufang(recommended), stochastic, floyd, ordered, none. |
 
 ### Video Options (video2xtc.py only)
 | Option | Effect |
 | :--- | :--- |
 | `--fps 1.0` | Frames per second to extract (Default: 1.0). |
 | `--invert` | Invert colors (White <-> Black). |
-| `--dither stucki` | Dithering: stucki, atkinson, ostromoukhov, zhoufang, stochastic, floyd, ordered, none. |
 
 ### Web Options (web2xtc.py only)
 | Option | Effect |
