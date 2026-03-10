@@ -121,7 +121,7 @@ python3 cbz2xtc.py <options>
 | `--clean` | Delete temporary files after the conversion is done. |
 | `--dither <algorithm>` | Dithering method: `stucki`(default), `atkinson`, `ostromoukhov`, `zhoufang`(recommended for e-ink), `stochastic`, `floyd`, `ordered`, `none`. |
 
-### Image Options (`video2xtc.py` only)
+### Image Options (`imagexth.py` only)
 | Option | Effect |
 | :--- | :--- |
 | `--xtg` | For 1-bit XTG image. |
