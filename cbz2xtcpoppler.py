@@ -874,9 +874,12 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                 if is_rtl:
                     v_list.reverse() # RTL: Left then Right (Swapped)
 
+                h_list = list(range(number_of_h_segments))
+                if not is_landscape and LANDSCAPE_PAGE_SPLIT == 'rtl' and not MANHWA:
+                    h_list.reverse()
+
                 for v_idx, v in enumerate(v_list):
-                    h = 0
-                    while h < number_of_h_segments:
+                    for h_idx, h in enumerate(h_list):
                         segment = img.crop((shiftover_to_overlap*h, shiftdown_to_overlap*v, width-(shiftover_to_overlap*(number_of_h_segments-h-1)), height-(shiftdown_to_overlap*(number_of_v_segments-v-1))))
                         # Landscape segments are already -90 from base rotation. 
                         # Rotate 90 to make them upright portrait (0) as requested.
@@ -884,11 +887,10 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                         segment_rotated = segment.rotate(90 if is_landscape else -90, expand=True)
                         
                         if number_of_h_segments > 1:
-                            output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v_idx]}_{letter_keys[h]}.png"
+                            output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v_idx]}_{letter_keys[h_idx]}.png"
                         else:
                             output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v_idx]}.png"
                         size = save_with_padding(segment_rotated, output, padcolor=PADDING_COLOR)
-                        h += 1
 
             else:
                 # Top half is Right (if landscape base -90) or Top (if portrait)
@@ -1624,7 +1626,8 @@ def main():
         except (ValueError, IndexError):
             print("Warning: --landscape-page-split flag missing value, using default 'none'")
 
-    if "--manhwa" in sys.argv:        try:
+    if "--manhwa" in sys.argv:
+        try:
             idx = sys.argv.index("--manhwa")
             if idx + 1 < len(sys.argv) and not sys.argv[idx+1].startswith("--"):
                 MANHWA_OVERLAP = int(sys.argv[idx + 1])
