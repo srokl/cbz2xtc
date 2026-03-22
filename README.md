@@ -114,14 +114,18 @@ python3 cbz2xtc.py <options>
 | `--compress` | Compress output using LZ4 into an `.xtcz` file (saves storage space). |
 | `--downscale <filter>` | Downscaling filter: `bicubic` (default), `bilinear`, `box`. |
 | `--manhwa <overlap>` | Use long-strip mode (default 40% overlap) for webtoons (cbz/web only). |
-| `--landscape-page-split <mode>`| Split wide pages. Default is `none` (overview only). Use `rtl` for Japanese manga, `ltr` for western comics. |
+| `--landscape-page-split <mode>`| Split wide pages into 3 pieces. Use `rtl` for Japanese manga (starts right), `ltr` for western. |
+| `--hsplit-count <#>` | Split upright pages into this many columns. Pieces rotate automatically based on display ratio. |
+| `--hsplit-overlap <float>` | Horizontal overlap percentage between columns (Default: 70). |
+| `--vsplit-count <#>` | Split upright pages into this many rows. Scales seamlessly with `hsplit` for perfect zero-padding grids. |
+| `--vsplit-overlap <float>` | Vertical overlap percentage between rows (Default: 5). |
 | `--include-overviews` | Add an upright full-page preview before segments. |
 | `--sideways-overviews` | Add a rotated full-page preview (-90 degrees). |
 | `--gamma <value>` | Brighten/Darken the image. Use `<1` to brighten and `>1` to darken (Default: 1). |
 | `--clean` | Delete temporary files after the conversion is done. |
 | `--dither <algorithm>` | Dithering method: `stucki`(default), `atkinson`, `ostromoukhov`, `zhoufang`(recommended for e-ink), `stochastic`, `floyd`, `ordered`, `none`. |
 
-### Image Options (`imagexth.py` only)
+### Image Options (`image2xth.py` only)
 | Option | Effect |
 | :--- | :--- |
 | `--xtg` | For 1-bit XTG image. |
@@ -145,8 +149,6 @@ python3 cbz2xtc.py <options>
 ---
 
 ## CLI Examples
-
-Open your terminal and run the following commands as needed. Each example demonstrates a common real-world scenario.
 
 ### Manga & PDF Conversion (`cbz2xtc.py`)
 *(Default output is 1-bit `.xtc`. Use `--2bit` for `.xtch` 4-level grayscale.)*

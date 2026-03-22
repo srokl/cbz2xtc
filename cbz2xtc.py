@@ -645,9 +645,7 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
     - Convert to grayscale/2-bit
     - Save as PNG (for XTC conversion)
     """
-    v_overlap = overlap_percent if overlap_percent is not None else MINIMUM_V_OVERLAP_PERCENT
-    if MANHWA and overlap_percent is None:
-        v_overlap = MANHWA_OVERLAP
+    v_overlap = overlap_percent if overlap_percent is not None else SET_V_OVERLAP_PERCENT
     try:
         from io import BytesIO
         uncropped_img = Image.open(BytesIO(img_data))
@@ -831,100 +829,83 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
         total_size = 0
 
         if should_this_split:
-            if OVERLAP or DESIRED_V_OVERLAP_SEGMENTS or SET_H_OVERLAP_SEGMENTS or is_landscape:
+            if OVERLAP or SET_V_OVERLAP_SEGMENTS > 1 or SET_H_OVERLAP_SEGMENTS > 1 or is_landscape:
                 # Use overlapping segments
-                sw = TARGET_HEIGHT
-                sh = TARGET_WIDTH
                 
-                number_of_h_segments = SET_H_OVERLAP_SEGMENTS
-                total_calculated_width = sw * number_of_h_segments - int((number_of_h_segments - 1) * (sw * 0.01 * SET_H_OVERLAP_PERCENT))
-                established_scale = total_calculated_width * 1.0 / width
-
-                overlapping_width = sw / established_scale // 1
-                shiftover_to_overlap = 0
-                if number_of_h_segments > 1:
-                    shiftover_to_overlap = overlapping_width - (overlapping_width * number_of_h_segments - width) // (number_of_h_segments - 1)
-
-                # For landscape spreads, we want at least 3 segments to ensure good zoom
-                number_of_v_segments = (DESIRED_V_OVERLAP_SEGMENTS - 1) if not is_landscape else 2
-                letter_keys = ["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"]
-
-                overlapping_height = sh / established_scale // 1
+                sw = TARGET_HEIGHT if is_landscape else TARGET_WIDTH
+                sh = TARGET_WIDTH if is_landscape else TARGET_HEIGHT
                 
-                # Ensure we have enough segments to cover the full height without gaps
-                shiftdown_to_overlap = 99999
-                while number_of_v_segments < 26:
-                    number_of_v_segments += 1
-                    if number_of_v_segments > 1:
-                        shiftdown_to_overlap = overlapping_height - (overlapping_height * number_of_v_segments - height) // (number_of_v_segments - 1)
-                    else:
-                        shiftdown_to_overlap = 0
-                    
-                    if shiftdown_to_overlap <= overlapping_height:
-                        if (shiftdown_to_overlap * 1.0 / overlapping_height) <= (1.0 - .01 * v_overlap):
-                            break
+                h_overlap = SET_H_OVERLAP_PERCENT
+                v_overlap_val = SET_V_OVERLAP_PERCENT
+                
+                requested_h = max(1, SET_H_OVERLAP_SEGMENTS)
+                requested_v = max(1, SET_V_OVERLAP_SEGMENTS)
+                
+                # Isolate landscape pages from grid settings
+                if is_landscape:
+                    requested_h = 1
+                    # requested_v will be overridden by the start index 2 in the loop
+                    v_overlap_val = 5.0 # minor overlap for spread halves
 
-                # Make overlapping segments that fill screen.
-                # Manhwa portrait splits should be upright portrait (480x800).
-                # All other splits (landscape or non-manhwa portrait) are sideways (800x480).
-                if MANHWA and not is_landscape:
-                    sw, sh = TARGET_WIDTH, TARGET_HEIGHT
+                # Scale from H
+                total_w_pixels = sw * requested_h - int((requested_h - 1) * (sw * 0.01 * h_overlap))
+                scale_h = total_w_pixels * 1.0 / width
+                
+                # Scale from V
+                total_h_pixels = sh * requested_v - int((requested_v - 1) * (sh * 0.01 * v_overlap_val))
+                scale_v = total_h_pixels * 1.0 / height
+                
+                # For landscape, force scale_h to be the driver (as it was in original code)
+                # For portrait, use the most demanding scale so BOTH counts are respected as minimums!
+                if is_landscape:
+                    established_scale = scale_h
                 else:
-                    sw, sh = TARGET_HEIGHT, TARGET_WIDTH
-                
-                number_of_h_segments = SET_H_OVERLAP_SEGMENTS
-                total_calculated_width = sw * number_of_h_segments - int((number_of_h_segments - 1) * (sw * 0.01 * SET_H_OVERLAP_PERCENT))
-                established_scale = total_calculated_width * 1.0 / width
+                    established_scale = max(scale_h, scale_v)
 
                 overlapping_width = sw / established_scale // 1
-                shiftover_to_overlap = 0
-                if number_of_h_segments > 1:
-                    shiftover_to_overlap = overlapping_width - (overlapping_width * number_of_h_segments - width) // (number_of_h_segments - 1)
-
-                # For landscape spreads, we want at least 3 segments to ensure good zoom
-                number_of_v_segments = (DESIRED_V_OVERLAP_SEGMENTS - 1) if not is_landscape else 2
-                letter_keys = ["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"]
-
                 overlapping_height = sh / established_scale // 1
                 
-                # Ensure we have enough segments to cover the full height without gaps
-                shiftdown_to_overlap = 99999
-                while number_of_v_segments < 26:
-                    number_of_v_segments += 1
-                    if number_of_v_segments > 1:
-                        shiftdown_to_overlap = overlapping_height - (overlapping_height * number_of_v_segments - height) // (number_of_v_segments - 1)
-                    else:
-                        shiftdown_to_overlap = 0
-                    
-                    if shiftdown_to_overlap <= overlapping_height:
-                        if (shiftdown_to_overlap * 1.0 / overlapping_height) <= (1.0 - .01 * v_overlap):
-                            break
+                shiftover_to_overlap = 99999
+                h_count = requested_h - 1
+                while h_count < 26:
+                    h_count += 1
+                    if overlapping_width * h_count >= width:
+                        shiftover_to_overlap = overlapping_width - (overlapping_width * h_count - width) // (h_count - 1) if h_count > 1 else 0
+                        break
+
+                v_count = requested_v - 1 if not is_landscape else 2
+                while v_count < 26:
+                    v_count += 1
+                    if overlapping_height * v_count >= height:
+                        shiftdown_to_overlap = overlapping_height - (overlapping_height * v_count - height) // (v_count - 1) if v_count > 1 else 0
+                        break
 
                 # Make overlapping segments that fill screen.
-                # Landscape: base -90, so Top (v=0) is Right, Bottom (v=max) is Left.
-                # Portrait: no rotation, so Top (v=0) is Top, Bottom (v=max) is Bottom.
-                v_list = list(range(number_of_v_segments))
+                # In rotated image (-90), Top (v=0) is Left, Bottom (v=max) is Right.
+                v_list = list(range(v_count))
                 if is_landscape:
                     # Default is LTR (Left then Right). RTL flag reverses this.
-                    is_rtl = (LANDSCAPE_PAGE_SPLIT == 'rtl') and not MANHWA
+                    is_rtl = (LANDSCAPE_PAGE_SPLIT == 'rtl')
                     if is_rtl:
                         v_list.reverse() # RTL: Left then Right (Swapped)
 
                 # Portrait splits are always Top-to-Bottom (v=0 to max).
 
-                h_list = list(range(number_of_h_segments))
-                if not is_landscape and LANDSCAPE_PAGE_SPLIT == 'rtl' and not MANHWA:
+                h_list = list(range(h_count))
+                if not is_landscape and LANDSCAPE_PAGE_SPLIT == 'rtl':
                     h_list.reverse()
+
+                letter_keys = ["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"]
 
                 for v_idx, v in enumerate(v_list):
                     for h_idx, h in enumerate(h_list):
-                        segment = img.crop((shiftover_to_overlap*h, shiftdown_to_overlap*v, width-(shiftover_to_overlap*(number_of_h_segments-h-1)), height-(shiftdown_to_overlap*(number_of_v_segments-v-1))))
-                        # Landscape segments rotate 90 to make them upright portrait (0).
-                        # Portrait segments: upright (0) if MANHWA, else sideways (-90).
-                        rot = 90 if is_landscape else (0 if MANHWA else -90)
+                        segment = img.crop((int(shiftover_to_overlap*h), int(shiftdown_to_overlap*v), int(shiftover_to_overlap*h + overlapping_width), int(shiftdown_to_overlap*v + overlapping_height)))
+                        # Segments that are landscape should be rotated so they are portrait on the device.
+                        # Segments that are naturally portrait display perfectly upright.
+                        rot = 0 if overlapping_width <= overlapping_height else (90 if is_landscape else -90)
                         segment_rotated = segment.rotate(rot, expand=True)
                         
-                        if number_of_h_segments > 1:
+                        if h_count > 1:
                             output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v_idx]}_{letter_keys[h_idx]}.png"
                         else:
                             output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v_idx]}.png"
@@ -936,14 +917,13 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                 # Bottom half is Left (if landscape base -90) or Bottom (if portrait)
                 part2 = img.crop((0, half_height, width, height))
                 
-                # Landscape segments rotate 90 (to become 0 upright).
-                # Portrait segments: upright (0) if MANHWA, else sideways (-90).
-                rot = 90 if is_landscape else (0 if MANHWA else -90)
+                # Determine optimal orientation for the split halves
+                rot = 0 if width <= half_height else (90 if is_landscape else -90)
                 part1_rotated = part1.rotate(rot, expand=True)
                 part2_rotated = part2.rotate(rot, expand=True)
                 
                 # Default is LTR. RTL reverses this for landscape.
-                is_rtl = (LANDSCAPE_PAGE_SPLIT == 'rtl') and not MANHWA
+                is_rtl = (LANDSCAPE_PAGE_SPLIT == 'rtl') and width > half_height
                 if is_landscape:
                     if is_rtl:
                         # RTL: Left (part2) then Right (part1)
@@ -1572,8 +1552,8 @@ def main():
         print("\n  --hsplit-count <#>   Split page horizontally into # segments.")
         print("\n  --hsplit-overlap <float>   horizontal overlap between segments.")
         print("\n  --hsplit-max-width <#>   limit the width of horizontal segments.")
-        print("\n  --vsplit-target <#>   try to split page vertically into # segments.")
-        print("\n  --vsplit-min-overlap <float>   minimum vertical overlap between segments.")
+        print("\n  --vsplit-count <#>   Split page vertically into # segments.")
+        print("\n  --vsplit-overlap <float>   vertical overlap between segments.")
         print("\n  --sample-set <pagenum> ...  Build a spread of contrast samples.")
         print("\n  --landscape-page-split <none|ltr|rtl>   Split wide pages (default: none).")
         print("\n  --manhwa <overlap-percent>  Process as long-strip webtoon. Optionally set overlap percentage (default 40). Example: --manhwa 50")
@@ -1603,9 +1583,9 @@ def main():
     global SELECT_OV_PAGES
     global START_PAGE
     global STOP_PAGE
-    global DESIRED_V_OVERLAP_SEGMENTS
+    global SET_V_OVERLAP_SEGMENTS
     global SET_H_OVERLAP_SEGMENTS
-    global MINIMUM_V_OVERLAP_PERCENT
+    global SET_V_OVERLAP_PERCENT
     global SET_H_OVERLAP_PERCENT
     global MAX_SPLIT_WIDTH
     global SAMPLE_SET
@@ -1763,12 +1743,12 @@ def main():
         elif arg == "--stop":
             STOP_PAGE = int(sys.argv[i+1])
             i += 1
-        elif arg == "--vsplit-target":
+        elif arg == "--vsplit-count":
             OVERLAP = True 
-            DESIRED_V_OVERLAP_SEGMENTS = int(sys.argv[i+1])
+            SET_V_OVERLAP_SEGMENTS = int(sys.argv[i+1])
             i += 1
-        elif arg == "--vsplit-min-overlap":
-            MINIMUM_V_OVERLAP_PERCENT = float(sys.argv[i+1])
+        elif arg == "--vsplit-overlap":
+            SET_V_OVERLAP_PERCENT = float(sys.argv[i+1])
             i += 1
         elif arg == "--hsplit-count":
             OVERLAP = True
