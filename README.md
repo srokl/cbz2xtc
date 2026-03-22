@@ -9,7 +9,7 @@ These tools are designed to maximize the reading experience on e-ink displays by
 - **Smart Formatting:** Auto-split landscape spreads into portrait panels, generate overviews, and support long-strip manhwa/webtoon scrolling.
 - **E-ink Optimization:** Multiple dithering algorithms for e-ink limited bit depth.
 - **High Performance:** Utilizes NumPy, Numba, and parallel processing for fast conversions.
-- **Space Saving:** Optional LZ4 compression (`.xtcz`) maintains fast decoding speeds while significantly reducing file sizes.
+- **Space Saving:** Optional LZ4 compression (`.xtcz`).
 
 ---
 

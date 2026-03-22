@@ -824,84 +824,89 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
             # Rotate landscape pages -90 first so they can be treated as tall portrait pages
             img = img.rotate(-90, expand=True)
             width, height = img.size
-
-        half_height = height // 2
+            
         total_size = 0
 
         if should_this_split:
-            if OVERLAP or SET_V_OVERLAP_SEGMENTS > 1 or SET_H_OVERLAP_SEGMENTS > 1 or is_landscape:
-                # Use overlapping segments
+            # Determine if user explicitly requested a grid
+            explicit_grid = (SET_H_OVERLAP_SEGMENTS > 1 or SET_V_OVERLAP_SEGMENTS > 1)
+            
+            # If no explicit grid, legacy portrait behavior applies (sideways horizontal strips)
+            should_use_sideways_aspect = is_landscape or (not explicit_grid and not is_landscape)
+            
+            sw = TARGET_HEIGHT if should_use_sideways_aspect else TARGET_WIDTH
+            sh = TARGET_WIDTH if should_use_sideways_aspect else TARGET_HEIGHT
+            
+            h_overlap = SET_H_OVERLAP_PERCENT
+            v_overlap_val = SET_V_OVERLAP_PERCENT
+            
+            requested_h = max(1, SET_H_OVERLAP_SEGMENTS)
+            requested_v = max(1, SET_V_OVERLAP_SEGMENTS)
+
+            # Isolate landscape pages and default portrait spreading from grid settings
+            if not explicit_grid or is_landscape:
+                requested_h = 1
+                # requested_v will be dynamically determined by the loop, just needs a starting index
+                if not is_landscape:
+                    requested_v = 1  # For default portrait, let it loop naturally up to 3!
                 
-                sw = TARGET_HEIGHT if is_landscape else TARGET_WIDTH
-                sh = TARGET_WIDTH if is_landscape else TARGET_HEIGHT
-                
-                h_overlap = SET_H_OVERLAP_PERCENT
-                v_overlap_val = SET_V_OVERLAP_PERCENT
-                
-                requested_h = max(1, SET_H_OVERLAP_SEGMENTS)
-                requested_v = max(1, SET_V_OVERLAP_SEGMENTS)
-                
-                # Isolate landscape pages from grid settings
-                if is_landscape:
-                    requested_h = 1
-                    # requested_v will be overridden by the start index 2 in the loop
-                    v_overlap_val = 5.0 # minor overlap for spread halves
+            # Scale from H
+            total_w_pixels = sw * requested_h - int((requested_h - 1) * (sw * 0.01 * h_overlap))
+            scale_h = total_w_pixels * 1.0 / width
+            
+            # Scale from V
+            total_h_pixels = sh * requested_v - int((requested_v - 1) * (sh * 0.01 * v_overlap_val))
+            scale_v = total_h_pixels * 1.0 / height
+            
+            # For non-explicit default strips, ONLY use scale_h (the original behavior)
+            if not explicit_grid or is_landscape:
+                established_scale = scale_h
+            else:
+                established_scale = max(scale_h, scale_v)
 
-                # Scale from H
-                total_w_pixels = sw * requested_h - int((requested_h - 1) * (sw * 0.01 * h_overlap))
-                scale_h = total_w_pixels * 1.0 / width
-                
-                # Scale from V
-                total_h_pixels = sh * requested_v - int((requested_v - 1) * (sh * 0.01 * v_overlap_val))
-                scale_v = total_h_pixels * 1.0 / height
-                
-                # For landscape, force scale_h to be the driver (as it was in original code)
-                # For portrait, use the most demanding scale so BOTH counts are respected as minimums!
-                if is_landscape:
-                    established_scale = scale_h
-                else:
-                    established_scale = max(scale_h, scale_v)
+            overlapping_width = sw / established_scale // 1
+            overlapping_height = sh / established_scale // 1
+            
+            h_count = requested_h - 1
+            while h_count < 26:
+                h_count += 1
+                if overlapping_width * h_count >= width:
+                    shiftover_to_overlap = overlapping_width - (overlapping_width * h_count - width) // (h_count - 1) if h_count > 1 else 0
+                    break
 
-                overlapping_width = sw / established_scale // 1
-                overlapping_height = sh / established_scale // 1
-                
-                shiftover_to_overlap = 99999
-                h_count = requested_h - 1
-                while h_count < 26:
-                    h_count += 1
-                    if overlapping_width * h_count >= width:
-                        shiftover_to_overlap = overlapping_width - (overlapping_width * h_count - width) // (h_count - 1) if h_count > 1 else 0
-                        break
+            v_count = requested_v - 1 if not is_landscape else 2
+            while v_count < 26:
+                v_count += 1
+                if overlapping_height * v_count >= height:
+                    shiftdown_to_overlap = overlapping_height - (overlapping_height * v_count - height) // (v_count - 1) if v_count > 1 else 0
+                    break
 
-                v_count = requested_v - 1 if not is_landscape else 2
-                while v_count < 26:
-                    v_count += 1
-                    if overlapping_height * v_count >= height:
-                        shiftdown_to_overlap = overlapping_height - (overlapping_height * v_count - height) // (v_count - 1) if v_count > 1 else 0
-                        break
+            # Make overlapping segments that fill screen.
+            # In rotated image (-90), Top (v=0) is Left, Bottom (v=max) is Right.
+            v_list = list(range(v_count))
+            if is_landscape:
+                # Default is LTR (Left then Right). RTL flag reverses this.
+                is_rtl = (LANDSCAPE_PAGE_SPLIT == 'rtl')
+                if is_rtl:
+                    v_list.reverse() # RTL: Left then Right (Swapped)
 
-                # Make overlapping segments that fill screen.
-                # In rotated image (-90), Top (v=0) is Left, Bottom (v=max) is Right.
-                v_list = list(range(v_count))
-                if is_landscape:
-                    # Default is LTR (Left then Right). RTL flag reverses this.
-                    is_rtl = (LANDSCAPE_PAGE_SPLIT == 'rtl')
-                    if is_rtl:
-                        v_list.reverse() # RTL: Left then Right (Swapped)
+            # Portrait splits are always Top-to-Bottom (v=0 to max).
 
-                # Portrait splits are always Top-to-Bottom (v=0 to max).
+            h_list = list(range(h_count))
+            if not is_landscape and LANDSCAPE_PAGE_SPLIT == 'rtl':
+                h_list.reverse()
 
-                h_list = list(range(h_count))
-                if not is_landscape and LANDSCAPE_PAGE_SPLIT == 'rtl':
-                    h_list.reverse()
-
-                letter_keys = ["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"]
-
-                for v_idx, v in enumerate(v_list):
-                    for h_idx, h in enumerate(h_list):
-                        segment = img.crop((int(shiftover_to_overlap*h), int(shiftdown_to_overlap*v), int(shiftover_to_overlap*h + overlapping_width), int(shiftdown_to_overlap*v + overlapping_height)))
-                        # Segments that are landscape should be rotated so they are portrait on the device.
-                        # Segments that are naturally portrait display perfectly upright.
+            letter_keys = ["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"]
+            for v_idx, v in enumerate(v_list):
+                for h_idx, h in enumerate(h_list):
+                    left = shiftover_to_overlap*h
+                    upper = shiftdown_to_overlap*v
+                    right = width - (shiftover_to_overlap*(h_count-h-1))
+                    lower = height - (shiftdown_to_overlap*(v_count-v-1))
+                    
+                    if right > left and lower > upper:
+                        segment = img.crop((left, upper, right, lower))
+                        
                         rot = 0 if overlapping_width <= overlapping_height else (90 if is_landscape else -90)
                         segment_rotated = segment.rotate(rot, expand=True)
                         
@@ -910,36 +915,7 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
                         else:
                             output = output_path_base.parent / f"{page_num:04d}{suffix}_3_{letter_keys[v_idx]}.png"
                         size = save_with_padding(segment_rotated, output, padcolor=PADDING_COLOR)
-
-            else:
-                # Top half is Right (if landscape base -90) or Top (if portrait)
-                part1 = img.crop((0, 0, width, half_height))
-                # Bottom half is Left (if landscape base -90) or Bottom (if portrait)
-                part2 = img.crop((0, half_height, width, height))
-                
-                # Determine optimal orientation for the split halves
-                rot = 0 if width <= half_height else (90 if is_landscape else -90)
-                part1_rotated = part1.rotate(rot, expand=True)
-                part2_rotated = part2.rotate(rot, expand=True)
-                
-                # Default is LTR. RTL reverses this for landscape.
-                is_rtl = (LANDSCAPE_PAGE_SPLIT == 'rtl') and width > half_height
-                if is_landscape:
-                    if is_rtl:
-                        # RTL: Left (part2) then Right (part1)
-                        first, second = part2_rotated, part1_rotated
-                    else:
-                        # LTR: Right (part1) then Left (part2)
-                        first, second = part1_rotated, part2_rotated
-                else:
-                    # Portrait: always Top (part1) then Bottom (part2)
-                    first, second = part1_rotated, part2_rotated
-                
-                out1 = output_path_base.parent / f"{page_num:04d}{suffix}_2_a.png"
-                out2 = output_path_base.parent / f"{page_num:04d}{suffix}_2_b.png"
-                
-                total_size += save_with_padding(first, out1, padcolor=PADDING_COLOR)
-                total_size += save_with_padding(second, out2, padcolor=PADDING_COLOR)
+                        total_size += size
         
         else: 
             # This is a dont-split page, treat like overview page
@@ -1299,8 +1275,8 @@ def extract_cbz_to_png(cbz_path, temp_dir):
                     overlap = MANHWA_OVERLAP if MANHWA else None
                     futures.append(executor.submit(optimize_image, img_data, output_base, idx, overlap_percent=overlap))
                 
-                for _ in as_completed(futures):
-                    pass
+                for f in as_completed(futures):
+                    f.result()
             
             print(f"✓")
             return output_folder
@@ -1693,9 +1669,9 @@ def main():
     ONLY_PAGES = []
     DONT_SPLIT_PAGES = []
     SELECT_OV_PAGES = []
-    DESIRED_V_OVERLAP_SEGMENTS = 3
+    SET_V_OVERLAP_SEGMENTS = 1
     SET_H_OVERLAP_SEGMENTS = 1
-    MINIMUM_V_OVERLAP_PERCENT = 5
+    SET_V_OVERLAP_PERCENT = 5.0
     SET_H_OVERLAP_PERCENT = 70
     MAX_SPLIT_WIDTH = 800
     PADDING_COLOR = 255
