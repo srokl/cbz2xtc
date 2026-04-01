@@ -61,6 +61,7 @@ GAMMA_VALUE = 1.0        # Gamma correction value (1.0 = neutral)
 INVERT_COLORS = False    # Invert colors (White <-> Black)
 PANEL_EXTRACT = False    # Detect and extract individual panels
 PANEL_MODEL = None       # Path or keyword for panel detection model
+PANEL_CONF = 0.40        # Confidence threshold for YOLO detection
 
 # Dithering options mapping
 DITHER_MAP = {
@@ -777,8 +778,8 @@ def optimize_image(img_data, output_path_base, page_num, suffix="", overlap_perc
         if PANEL_EXTRACT and not is_solid and extract_panels:
             is_rtl = RTL or (LANDSCAPE_PAGE_SPLIT == 'rtl')
             method = "yolo" if PANEL_MODEL else "opencv"
-            print(f"  Extracting panels for page {page_num} (method: {method}, rtl: {is_rtl})...")
-            panels = extract_panels(uncropped_img, is_rtl=is_rtl, method=method, model_path=PANEL_MODEL)
+            print(f"  Extracting panels for page {page_num} (method: {method}, rtl: {is_rtl}, conf: {PANEL_CONF})...")
+            panels = extract_panels(uncropped_img, is_rtl=is_rtl, method=method, model_path=PANEL_MODEL, conf=PANEL_CONF)
             if panels:
                 print(f"  Found {len(panels)} panels.")
                 for i, panel_img in enumerate(panels):
@@ -1571,6 +1572,7 @@ def main():
         print("\n  --manhwa <overlap-percent>  Process as long-strip webtoon. Optionally set overlap percentage (default 40). Example: --manhwa 50")
         print("\n  --panel       Detect and extract individual panels from each page.")
         print("\n  --panel-model <path|manga109>  Specify detection model. Using 'manga109' enables YOLOv8 logic.")
+        print("\n  --panel-conf <float>  Set confidence threshold for YOLO detection (default: 0.40). Use higher values to reduce false positives.")
         print("\n  --rtl         Use Right-to-Left reading order for landscape splits and panel sorting.")
         print("\n  --no-rotate-panels  Don't automatically rotate wide panels to portrait.")
         print("\n  --clean       Automatically delete temporary PNG files after conversion.")
@@ -1615,6 +1617,7 @@ def main():
     global PANEL_MODEL
     global RTL
     global NO_ROTATE_PANELS
+    global PANEL_CONF
     
     # New globals
     global XTC_MODE
@@ -1631,12 +1634,19 @@ def main():
     PANEL_EXTRACT = "--panel" in sys.argv
     RTL = "--rtl" in sys.argv
     NO_ROTATE_PANELS = "--no-rotate-panels" in sys.argv
+    PANEL_CONF = 0.40
     PANEL_MODEL = None
     if "--panel-model" in sys.argv:
         try:
             PANEL_MODEL = sys.argv[sys.argv.index("--panel-model") + 1]
         except IndexError:
             pass
+        
+    if "--panel-conf" in sys.argv:
+        try:
+            PANEL_CONF = float(sys.argv[sys.argv.index("--panel-conf") + 1])
+        except (ValueError, IndexError):
+            print("Warning: Invalid or missing value for --panel-conf, using default 0.40")
 
     if PANEL_EXTRACT and extract_panels is None:
         print("Warning: --panel is set but dependencies or module 'panel viewer int' not found. Panel detection disabled.")
@@ -1743,8 +1753,8 @@ def main():
     while i < len(sys.argv):
         arg = sys.argv[i]
         # Skip value args we already handled or boolean args
-        if arg in ["--dither", "--2bit", "--no-dither", "--clean", "--overlap", "--split-all", "--pad-black", "--include-overviews", "--sideways-overviews", "--gamma", "--invert", "--downscale", "--compress", "--landscape-page-split", "--panel", "--panel-model", "--rtl", "--no-rotate-panels"]:
-            if arg == "--dither" or arg == "--gamma" or arg == "--downscale" or arg == "--landscape-page-split" or arg == "--panel-model":
+        if arg in ["--dither", "--2bit", "--no-dither", "--clean", "--overlap", "--split-all", "--pad-black", "--include-overviews", "--sideways-overviews", "--gamma", "--invert", "--downscale", "--compress", "--landscape-page-split", "--panel", "--panel-model", "--panel-conf", "--rtl", "--no-rotate-panels"]:
+            if arg == "--dither" or arg == "--gamma" or arg == "--downscale" or arg == "--landscape-page-split" or arg == "--panel-model" or arg == "--panel-conf":
                  i += 1 # skip value
             # booleans are already handled
         elif arg == "--split-spreads":

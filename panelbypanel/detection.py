@@ -4,7 +4,10 @@ try:
 except (ImportError, ValueError):
     from yolo_detection import YoloDetector
 
-def detect_panels(img_pil, is_rtl=False, method="opencv", model_path=None):
+# Global cache for detector instances
+_DETECTOR_CACHE = {}
+
+def detect_panels(img_pil, is_rtl=False, method="opencv", model_path=None, conf=0.40):
     """
     Detect panels in a PIL image.
     method: "opencv" (contour based) or "yolo" (YOLOv8 based).
@@ -12,8 +15,14 @@ def detect_panels(img_pil, is_rtl=False, method="opencv", model_path=None):
     Returns: List of (x, y, w, h) bounding boxes.
     """
     if method == "yolo" or model_path:
-        detector = YoloDetector(model_path)
-        panel_boxes = detector.detect(img_pil)
+        # Use singleton/cached detector instance
+        global _DETECTOR_CACHE
+        cache_key = model_path or "default"
+        if cache_key not in _DETECTOR_CACHE:
+            _DETECTOR_CACHE[cache_key] = YoloDetector(model_path)
+        
+        detector = _DETECTOR_CACHE[cache_key]
+        panel_boxes = detector.detect(img_pil, conf=conf)
     else:
         # Backward compatibility / Default OpenCV logic
         import cv2
@@ -92,10 +101,10 @@ def detect_panels(img_pil, is_rtl=False, method="opencv", model_path=None):
 
     return sort_panels(filtered_boxes)
 
-def extract_panels(img_pil, is_rtl=False, method="opencv", model_path=None):
+def extract_panels(img_pil, is_rtl=False, method="opencv", model_path=None, conf=0.40):
     """
     Detect AND crop panels from a PIL image.
     Returns: List of PIL Image objects (the cropped panels).
     """
-    boxes = detect_panels(img_pil, is_rtl, method=method, model_path=model_path)
+    boxes = detect_panels(img_pil, is_rtl, method=method, model_path=model_path, conf=conf)
     return [img_pil.crop((x, y, x + w, y + h)) for (x, y, w, h) in boxes]

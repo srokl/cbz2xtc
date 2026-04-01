@@ -1,5 +1,4 @@
 import os
-import requests
 from PIL import Image
 import numpy as np
 
@@ -8,9 +7,10 @@ try:
 except ImportError:
     YOLO = None
 
-DEFAULT_MODEL_URL = "https://github.com/kuronime/manga-panel-detection/releases/download/v1.0.0/manga-panel-det-v8n.pt"
-MODEL_FILENAME = "model.pt" # Default to user provided model
-FALLBACK_FILENAME = "manga-panel-det-v8n.pt"
+MODEL_FILENAME = os.path.join(os.path.dirname(__file__), "best.pt")
+
+# Global cache to reuse loaded YOLO models across multiple instances/threads
+_MODEL_CACHE = {}
 
 class YoloDetector:
     def __init__(self, model_path=None):
@@ -19,26 +19,16 @@ class YoloDetector:
         
         self.model_path = model_path or MODEL_FILENAME
         
-        # If user specifies 'manga109' but we don't have it, download fallback
-        if self.model_path == "manga109":
-             self.model_path = FALLBACK_FILENAME
-
-        # Auto-download fallback if it's explicitly requested or missing
-        if not os.path.exists(self.model_path) and self.model_path == FALLBACK_FILENAME:
-            print(f"Downloading pre-trained manga panel detection model to {self.model_path}...")
-            response = requests.get(DEFAULT_MODEL_URL, stream=True)
-            if response.status_code == 200:
-                with open(self.model_path, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                print("Download complete.")
-            else:
-                raise Exception(f"Failed to download model from {DEFAULT_MODEL_URL}. Status code: {response.status_code}")
-        
         if not os.path.exists(self.model_path):
-             raise FileNotFoundError(f"Model file {self.model_path} not found. Please provide {MODEL_FILENAME} or use 'manga109'.")
+             raise FileNotFoundError(f"Model file {self.model_path} not found. Please provide {MODEL_FILENAME} in the panelbypanel folder.")
              
-        self.model = YOLO(self.model_path)
+        # Use singleton/cached model instance
+        global _MODEL_CACHE
+        if self.model_path not in _MODEL_CACHE:
+            print(f"Loading YOLO model from {self.model_path}...") # Inform user of first-time load
+            _MODEL_CACHE[self.model_path] = YOLO(self.model_path)
+            
+        self.model = _MODEL_CACHE[self.model_path]
 
     def detect(self, img_pil, conf=0.40):
         """
