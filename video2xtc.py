@@ -11,6 +11,9 @@ Usage:
 
 import os
 import sys
+import math
+import heapq
+import random
 import shutil
 import subprocess
 import struct
@@ -45,7 +48,8 @@ DITHER_MAP = {
     'stucki': 'stucki',
     'ostromoukhov': 'ostromoukhov',
     'zhoufang': 'zhoufang',
-    'stochastic': 'stochastic'
+    'stochastic': 'stochastic',
+    'contrast-aware': 'contrast-aware'
 }
 
 @njit
@@ -322,6 +326,167 @@ def dither_atkinson(img, levels):
     final_arr = np.clip(res_arr[0:h, 1:w+1], 0, 255).astype(np.uint8)
     return Image.fromarray(final_arr, 'L')
 
+@njit
+def _heap_sift_up(heap, idx):
+    while idx > 0:
+        parent = (idx - 1) // 2
+        if (heap[parent, 0] > heap[idx, 0] or 
+            (heap[parent, 0] == heap[idx, 0] and heap[parent, 1] > heap[idx, 1]) or 
+            (heap[parent, 0] == heap[idx, 0] and heap[parent, 1] == heap[idx, 1] and heap[parent, 2] > heap[idx, 2])):
+            for i in range(5):
+                tmp = heap[parent, i]
+                heap[parent, i] = heap[idx, i]
+                heap[idx, i] = tmp
+            idx = parent
+        else:
+            break
+
+@njit
+def _heap_sift_down(heap, size, idx):
+    while True:
+        left = 2 * idx + 1
+        right = 2 * idx + 2
+        smallest = idx
+        if left < size:
+            if (heap[left, 0] < heap[smallest, 0] or 
+                (heap[left, 0] == heap[smallest, 0] and heap[left, 1] < heap[smallest, 1]) or 
+                (heap[left, 0] == heap[smallest, 0] and heap[left, 1] == heap[smallest, 1] and heap[left, 2] < heap[smallest, 2])):
+                smallest = left
+        if right < size:
+            if (heap[right, 0] < heap[smallest, 0] or 
+                (heap[right, 0] == heap[smallest, 0] and heap[right, 1] < heap[smallest, 1]) or 
+                (heap[right, 0] == heap[smallest, 0] and heap[right, 1] == heap[smallest, 1] and heap[right, 2] < heap[smallest, 2])):
+                smallest = right
+        if smallest != idx:
+            for i in range(5):
+                tmp = heap[smallest, i]
+                heap[smallest, i] = heap[idx, i]
+                heap[idx, i] = tmp
+            idx = smallest
+        else:
+            break
+
+@njit
+def _get_dist_njit(v, lvls):
+    min_d = 1.0
+    for i in range(len(lvls)):
+        d = abs(v - lvls[i])
+        if d < min_d:
+            min_d = d
+    return min_d
+
+@njit
+def _contrast_aware_loop(input_arr, levels, mask_offsets, mask_inv_dist, tiebreakers):
+    height, width = input_arr.shape
+    output = np.zeros_like(input_arr)
+    visited_pixels = np.zeros((height, width), dtype=np.uint8)
+    heap_max_size = width * height * 12
+    heap = np.zeros((heap_max_size, 5), dtype=np.int32)
+    heap_size = 0
+    residual_error = 0.0
+    for y in range(height):
+        for x in range(width):
+            intensity = input_arr[y, x]
+            dist = _get_dist_njit(intensity, levels)
+            heap[heap_size, 0] = 0
+            heap[heap_size, 1] = int(dist * 255)
+            heap[heap_size, 2] = tiebreakers[y * width + x]
+            heap[heap_size, 3] = x
+            heap[heap_size, 4] = y
+            _heap_sift_up(heap, heap_size)
+            heap_size += 1
+    while heap_size > 0:
+        prio = heap[0, 0]
+        dist_int = heap[0, 1]
+        tie = heap[0, 2]
+        x = heap[0, 3]
+        y = heap[0, 4]
+        for i in range(5):
+            heap[0, i] = heap[heap_size - 1, i]
+        heap_size -= 1
+        if heap_size > 0:
+            _heap_sift_down(heap, heap_size, 0)
+        intensity = input_arr[y, x]
+        current_dist = _get_dist_njit(intensity, levels)
+        if visited_pixels[y, x] or dist_int != int(current_dist * 255):
+            continue
+        intensity += residual_error
+        residual_error = 0.0
+        best_level = levels[0]
+        min_d = abs(intensity - best_level)
+        for i in range(1, len(levels)):
+            lv = levels[i]
+            d = abs(intensity - lv)
+            if d < min_d:
+                min_d = d
+                best_level = lv
+        output[y, x] = best_level
+        error = intensity - best_level
+        visited_pixels[y, x] = 1
+        if abs(error) < 1e-6:
+            continue
+        total_weight = 0.0
+        weights = np.zeros(mask_offsets.shape[0], dtype=np.float32)
+        for i in range(mask_offsets.shape[0]):
+            dx = mask_offsets[i, 0]
+            dy = mask_offsets[i, 1]
+            mx, my = x + dx, y + dy
+            if 0 <= mx < width and 0 <= my < height and not visited_pixels[my, mx]:
+                mask_intensity = input_arr[my, mx]
+                if error > 0.0:
+                    w = mask_intensity * mask_inv_dist[i]
+                else:
+                    w = (1.0 - mask_intensity) * mask_inv_dist[i]
+                if w > 0:
+                    weights[i] = w
+                    total_weight += w
+        if total_weight > 1e-6:
+            for i in range(mask_offsets.shape[0]):
+                if weights[i] > 0:
+                    dx = mask_offsets[i, 0]
+                    dy = mask_offsets[i, 1]
+                    mx, my = x + dx, y + dy
+                    norm_w = weights[i] / total_weight
+                    new_intensity = input_arr[my, mx] + error * norm_w
+                    if new_intensity > 1.0:
+                        residual_error += new_intensity - 1.0
+                        new_intensity = 1.0
+                    elif new_intensity < 0.0:
+                        residual_error += new_intensity
+                        new_intensity = 0.0
+                    input_arr[my, mx] = new_intensity
+                    if heap_size < heap_max_size:
+                        new_dist = _get_dist_njit(new_intensity, levels)
+                        heap[heap_size, 0] = prio + 1
+                        heap[heap_size, 1] = int(new_dist * 255)
+                        heap[heap_size, 2] = tie
+                        heap[heap_size, 3] = mx
+                        heap[heap_size, 4] = my
+                        _heap_sift_up(heap, heap_size)
+                        heap_size += 1
+    return output
+
+def dither_contrast_aware(img, levels):
+    """Apply Contrast-Aware dithering variant (Numba-optimized)."""
+    mask_size = 7
+    r = mask_size // 2
+    offsets = []
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            if dx == 0 and dy == 0: continue
+            if dx*dx + dy*dy <= r*r:
+                offsets.append((dx, dy))
+    mask_offsets = np.array(offsets, dtype=np.int32)
+    mask_inv_dist = np.array([1.0 / (o[0]*o[0] + o[1]*o[1]) for o in offsets], dtype=np.float32)
+    input_arr = np.array(img, dtype=np.float32) / 255.0
+    levels_norm = np.array([l / 255.0 for l in levels], dtype=np.float32)
+    num_pixels = input_arr.shape[0] * input_arr.shape[1]
+    tiebreakers = np.arange(num_pixels, dtype=np.int32)
+    np.random.shuffle(tiebreakers)
+    output = _contrast_aware_loop(input_arr, levels_norm, mask_offsets, mask_inv_dist, tiebreakers)
+    final_arr = (output * 255).astype(np.uint8)
+    return Image.fromarray(final_arr, 'L')
+
 def png_to_xtg_bytes(img: Image.Image, force_size=(480, 800), threshold=128):
     if img.size != force_size:
         img = img.resize(force_size, Image.Resampling.BILINEAR)
@@ -461,6 +626,8 @@ def optimize_frame(img, output_path):
             result = dither_zhoufang(result, levels=[0, 85, 170, 255])
         elif DITHER_ALGO == 'stochastic':
             result = dither_stochastic(result, levels=[0, 85, 170, 255])
+        elif DITHER_ALGO == 'contrast-aware':
+            result = dither_contrast_aware(result, levels=[0, 85, 170, 255])
         else:
             pal_img = Image.new("P", (1, 1))
             pal_img.putpalette([0,0,0, 85,85,85, 170,170,170, 255,255,255] + [0,0,0]*252)
@@ -482,6 +649,9 @@ def optimize_frame(img, output_path):
             result = result.convert('1', dither=Image.Dither.NONE)
         elif DITHER_ALGO == 'stochastic':
             result = dither_stochastic(result, levels=[0, 255])
+            result = result.convert('1', dither=Image.Dither.NONE)
+        elif DITHER_ALGO == 'contrast-aware':
+            result = dither_contrast_aware(result, levels=[0, 255])
             result = result.convert('1', dither=Image.Dither.NONE)
         else:
             dither_mode = DITHER_MAP.get(DITHER_ALGO, Image.Dither.FLOYDSTEINBERG)

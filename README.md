@@ -123,7 +123,7 @@ python3 cbz2xtc.py <options>
 | `--sideways-overviews` | Add a rotated full-page preview (-90 degrees). |
 | `--gamma <value>` | Brighten/Darken the image. Use `<1` to brighten and `>1` to darken (Default: 1). |
 | `--clean` | Delete temporary files after the conversion is done. |
-| `--dither <algorithm>` | Dithering method: `stucki`(default), `atkinson`, `ostromoukhov`, `zhoufang`(recommended for e-ink), `stochastic`, `floyd`, `ordered`, `none`. |
+| `--dither <algorithm>` | Dithering method: `stucki`(default), `atkinson`, `ostromoukhov`,`contrast-aware` `zhoufang`(recommended for e-ink), `stochastic`, `floyd`, `ordered`, `none`. |
 
 ### Image Options (`image2xth.py` only)
 | Option | Effect |
